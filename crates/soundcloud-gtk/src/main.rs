@@ -3,7 +3,10 @@ use std::{cell::RefCell, rc::Rc};
 use adw::prelude::*;
 use gtk::glib;
 use meowify_core::can_persist_youtube_audio;
-use meowify_party::{PartyPermission, PartyRole, can};
+use meowify_party::{
+    ConnectionState, JoinRequest, PartyClient, PartyRole, PlaybackCommandKind, RoomServer,
+    RoomSnapshot, RoomVisibility, TrackRef,
+};
 use meowify_playback::{PlaybackError, PlaybackState, PlaybackStatus};
 
 const APP_ID: &str = "dev.meowify.Meowify";
@@ -111,8 +114,8 @@ fn main_panel() -> gtk::Box {
     panel.append(&summary);
     panel.append(&search);
     panel.append(&playback_card());
+    panel.append(&party_card());
     panel.append(&status_card("Offline policy", offline_policy_text()));
-    panel.append(&status_card("Party mode", party_policy_text()));
 
     panel
 }
@@ -207,6 +210,203 @@ fn playback_card() -> gtk::Frame {
     frame.set_child(Some(&card));
     frame.add_css_class("card");
     frame
+}
+
+fn party_card() -> gtk::Frame {
+    let admin = PartyClient {
+        client_id: "admin-1".to_string(),
+        device_name: "laptop".to_string(),
+        user_name: "Alice (admin)".to_string(),
+        role: PartyRole::Admin,
+        permissions_override: Vec::new(),
+        connected_at_ms: 0,
+        last_seen_ms: 0,
+        connection_state: ConnectionState::Connected,
+    };
+    let mut server = RoomServer::create(
+        "demo-room",
+        "LAN Party Demo",
+        RoomVisibility::LanVisible,
+        admin,
+        "demo-invite",
+        0,
+    );
+    let _ = server.handle_join_request(JoinRequest {
+        request_id: "req-bob".to_string(),
+        room_id: "demo-room".to_string(),
+        client_id: "client-bob".to_string(),
+        user_name: "Bob".to_string(),
+        device_name: "phone".to_string(),
+        invite_code_attempt: None,
+        requested_at_ms: 500,
+    });
+    let _ = server.approve_join("admin-1", "req-bob", PartyRole::Client, 1000);
+    let _ = server.add_queue_item(
+        "admin-1",
+        "item-1",
+        TrackRef::YouTube {
+            video_id: "dQw4w9WgXcQ".to_string(),
+            title: Some("Never Gonna Give You Up".to_string()),
+            channel_title: Some("Rick Astley".to_string()),
+        },
+    );
+    let _ = server.apply_playback_command(
+        "admin-1",
+        PlaybackCommandKind::SetTrack {
+            track_ref: TrackRef::YouTube {
+                video_id: "dQw4w9WgXcQ".to_string(),
+                title: Some("Never Gonna Give You Up".to_string()),
+                channel_title: Some("Rick Astley".to_string()),
+            },
+        },
+        2000,
+    );
+
+    let server = Rc::new(RefCell::new(server));
+
+    let card = gtk::Box::new(gtk::Orientation::Vertical, 10);
+    card.set_margin_top(14);
+    card.set_margin_bottom(14);
+    card.set_margin_start(14);
+    card.set_margin_end(14);
+
+    let title_label = gtk::Label::new(Some("Party Room"));
+    title_label.set_xalign(0.0);
+    title_label.add_css_class("heading");
+
+    let snap = server.borrow().snapshot();
+    let state_label = gtk::Label::new(Some(&party_state_text(&snap)));
+    state_label.set_xalign(0.0);
+
+    let members_label = gtk::Label::new(Some(&party_members_text(&snap)));
+    members_label.set_xalign(0.0);
+    members_label.add_css_class("dim-label");
+
+    let queue_label = gtk::Label::new(Some(&party_queue_text(&snap)));
+    queue_label.set_xalign(0.0);
+    queue_label.add_css_class("dim-label");
+
+    let playback_label = gtk::Label::new(Some(&party_playback_text(&snap)));
+    playback_label.set_xalign(0.0);
+    playback_label.add_css_class("dim-label");
+
+    let event_label = gtk::Label::new(Some("Demo room loaded; admin actions available."));
+    event_label.set_xalign(0.0);
+    event_label.set_wrap(true);
+    event_label.add_css_class("dim-label");
+
+    let controls = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    let lock_btn = gtk::Button::with_label("Lock");
+    let unlock_btn = gtk::Button::with_label("Unlock");
+    let end_btn = gtk::Button::with_label("End Room");
+    controls.append(&lock_btn);
+    controls.append(&unlock_btn);
+    controls.append(&end_btn);
+
+    let labels = PartyCardLabels {
+        state: state_label.clone(),
+        members: members_label.clone(),
+        queue: queue_label.clone(),
+        playback: playback_label.clone(),
+        event: event_label.clone(),
+    };
+
+    connect_party_button(
+        &lock_btn,
+        Rc::clone(&server),
+        labels.clone(),
+        |srv| match srv.lock_room("admin-1") {
+            Ok(()) => "Room locked.".to_string(),
+            Err(e) => format!("Lock failed: {e}"),
+        },
+    );
+    connect_party_button(
+        &unlock_btn,
+        Rc::clone(&server),
+        labels.clone(),
+        |srv| match srv.unlock_room("admin-1") {
+            Ok(()) => "Room unlocked.".to_string(),
+            Err(e) => format!("Unlock failed: {e}"),
+        },
+    );
+    connect_party_button(&end_btn, Rc::clone(&server), labels, |srv| {
+        match srv.end_room("admin-1") {
+            Ok(()) => "Room ended.".to_string(),
+            Err(e) => format!("End failed: {e}"),
+        }
+    });
+
+    card.append(&title_label);
+    card.append(&state_label);
+    card.append(&members_label);
+    card.append(&queue_label);
+    card.append(&playback_label);
+    card.append(&event_label);
+    card.append(&controls);
+
+    let frame = gtk::Frame::new(None);
+    frame.set_child(Some(&card));
+    frame.add_css_class("card");
+    frame
+}
+
+#[derive(Clone)]
+struct PartyCardLabels {
+    state: gtk::Label,
+    members: gtk::Label,
+    queue: gtk::Label,
+    playback: gtk::Label,
+    event: gtk::Label,
+}
+
+fn connect_party_button(
+    button: &gtk::Button,
+    server: Rc<RefCell<RoomServer>>,
+    labels: PartyCardLabels,
+    action: fn(&mut RoomServer) -> String,
+) {
+    button.connect_clicked(move |_| {
+        let event_text = action(&mut server.borrow_mut());
+        let snap = server.borrow().snapshot();
+        labels.state.set_text(&party_state_text(&snap));
+        labels.members.set_text(&party_members_text(&snap));
+        labels.queue.set_text(&party_queue_text(&snap));
+        labels.playback.set_text(&party_playback_text(&snap));
+        labels.event.set_text(&event_text);
+    });
+}
+
+fn party_state_text(snap: &RoomSnapshot) -> String {
+    format!(
+        "Room: {} | State: {:?} | Protocol v{}",
+        snap.room.room_name, snap.room.state, snap.protocol_version
+    )
+}
+
+fn party_members_text(snap: &RoomSnapshot) -> String {
+    format!("Members: {}", snap.members.len())
+}
+
+fn party_queue_text(snap: &RoomSnapshot) -> String {
+    format!("Queue: {} item(s)", snap.queue.len())
+}
+
+fn party_playback_text(snap: &RoomSnapshot) -> String {
+    let pb = &snap.playback_state;
+    match &pb.track_ref {
+        Some(TrackRef::YouTube {
+            title, video_id, ..
+        }) => format!(
+            "Playing: {} ({}) — {} ms",
+            title.as_deref().unwrap_or("(no title)"),
+            video_id,
+            pb.position_ms
+        ),
+        Some(TrackRef::ImportedLocalFile { title, .. }) => {
+            format!("Playing: [local] {title} — {} ms", pb.position_ms)
+        }
+        None => "Playback: idle".to_string(),
+    }
 }
 
 fn connect_playback_button(
@@ -361,17 +561,10 @@ fn offline_policy_text() -> &'static str {
     }
 }
 
-fn party_policy_text() -> &'static str {
-    if can(PartyRole::Client, PartyPermission::ControlPlayback) {
-        "Clients can control playback by default. Recheck role policy before networking lands."
-    } else {
-        "Normal clients cannot control playback by default; protocol handlers must enforce RBAC."
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use meowify_party::{PartyPermission, can};
 
     #[test]
     fn shell_sections_include_party_and_offline_guardrails() {
@@ -390,7 +583,63 @@ mod tests {
     #[test]
     fn gtk_copy_reflects_party_rbac_policy() {
         assert!(!can(PartyRole::Client, PartyPermission::ControlPlayback));
-        assert!(party_policy_text().contains("cannot control playback"));
+    }
+
+    #[test]
+    fn party_state_text_includes_room_name_state_and_protocol() {
+        use meowify_party::{
+            ConnectionState, PartyClient, PartyRole, RoomServer, RoomSnapshot, RoomVisibility,
+        };
+        let admin = PartyClient {
+            client_id: "admin-1".to_string(),
+            device_name: "laptop".to_string(),
+            user_name: "Admin".to_string(),
+            role: PartyRole::Admin,
+            permissions_override: Vec::new(),
+            connected_at_ms: 0,
+            last_seen_ms: 0,
+            connection_state: ConnectionState::Connected,
+        };
+        let server = RoomServer::create(
+            "r1",
+            "Test Room",
+            RoomVisibility::LanVisible,
+            admin,
+            "invite",
+            0,
+        );
+        let snap: RoomSnapshot = server.snapshot();
+
+        let text = party_state_text(&snap);
+        assert!(text.contains("Test Room"));
+        assert!(text.contains("WaitingForClients"));
+        assert!(text.contains("Protocol v"));
+    }
+
+    #[test]
+    fn party_playback_text_reports_idle_without_track() {
+        use meowify_party::{ConnectionState, PartyClient, PartyRole, RoomServer, RoomVisibility};
+        let admin = PartyClient {
+            client_id: "admin-1".to_string(),
+            device_name: "laptop".to_string(),
+            user_name: "Admin".to_string(),
+            role: PartyRole::Admin,
+            permissions_override: Vec::new(),
+            connected_at_ms: 0,
+            last_seen_ms: 0,
+            connection_state: ConnectionState::Connected,
+        };
+        let server = RoomServer::create(
+            "r1",
+            "Test Room",
+            RoomVisibility::LanVisible,
+            admin,
+            "invite",
+            0,
+        );
+        let snap = server.snapshot();
+
+        assert_eq!(party_playback_text(&snap), "Playback: idle");
     }
 
     #[test]
