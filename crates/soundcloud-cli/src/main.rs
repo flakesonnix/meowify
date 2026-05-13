@@ -93,6 +93,7 @@ enum RoomStateArg {
     Waiting,
     Active,
     Locked,
+    Paused,
     Ended,
 }
 
@@ -103,6 +104,7 @@ impl RoomStateArg {
             (Self::Waiting, RoomState::WaitingForClients)
                 | (Self::Active, RoomState::Active)
                 | (Self::Locked, RoomState::Locked)
+                | (Self::Paused, RoomState::PausedByAdminDisconnect)
                 | (Self::Ended, RoomState::Ended)
         )
     }
@@ -569,6 +571,12 @@ mod tests {
     #[test]
     fn snapshot_filter_min_members_three_excludes() {
         let output = render_snapshot(false, None, Some(3));
+        assert_eq!(output, "No rooms match the filter.\n");
+    }
+
+    #[test]
+    fn snapshot_filter_paused_excludes_active_demo_room() {
+        let output = render_snapshot(false, Some(RoomStateArg::Paused), None);
         assert_eq!(output, "No rooms match the filter.\n");
     }
 
