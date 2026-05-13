@@ -44,10 +44,10 @@ pub enum QueueItemStatus {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TrackRef {
-    SoundCloud {
-        urn: String,
+    YouTube {
+        video_id: String,
         title: Option<String>,
-        permalink_url: Option<String>,
+        channel_title: Option<String>,
     },
     ImportedLocalFile {
         local_id: String,
