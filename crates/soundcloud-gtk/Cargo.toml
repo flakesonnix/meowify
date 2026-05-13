@@ -11,4 +11,5 @@ adw.workspace = true
 gtk.workspace = true
 meowify-core = { path = "../soundcloud-core" }
 meowify-party = { path = "../soundcloud-party" }
+meowify-playback = { path = "../soundcloud-playback" }
 tracing.workspace = true
