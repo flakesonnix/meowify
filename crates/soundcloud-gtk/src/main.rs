@@ -2,7 +2,6 @@ use std::{cell::RefCell, rc::Rc};
 
 use adw::prelude::*;
 use gtk::glib;
-use meowify_core::can_persist_youtube_audio;
 use meowify_party::{
     ConnectionState, JoinRequest, LanDiscoveryHandle, PartyClient, PartyRole, PlaybackCommandKind,
     RoomServer, RoomSnapshot, RoomVisibility, TrackRef,
@@ -96,19 +95,19 @@ fn main_panel() -> gtk::Box {
     panel.set_hexpand(true);
     panel.set_vexpand(true);
 
-    let heading = gtk::Label::new(Some("YouTube client shell"));
+    let heading = gtk::Label::new(Some("Meowify"));
     heading.set_xalign(0.0);
     heading.add_css_class("title-1");
 
     let summary = gtk::Label::new(Some(
-        "Search, library, playback, and party controls will land here. The shell already keeps offline and room-mode guardrails visible while backend wiring grows.",
+        "Local-first media player with LAN party mode. Import local files, create playlists, discover rooms on the network — no account required.",
     ));
     summary.set_xalign(0.0);
     summary.set_wrap(true);
 
     let search = gtk::SearchEntry::new();
-    search.set_placeholder_text(Some("Search YouTube after OAuth is configured"));
-    search.set_sensitive(false);
+    search.set_placeholder_text(Some("Search local library"));
+    search.set_sensitive(true);
 
     panel.append(&heading);
     panel.append(&summary);
@@ -734,29 +733,25 @@ fn shell_sections() -> [ShellSection; 5] {
         },
         ShellSection {
             title: "Search",
-            detail: "YouTube Data API v3 search only",
+            detail: "Search tracks and artists in local library",
         },
         ShellSection {
             title: "Library",
-            detail: "Local playlists, follows, favorites",
+            detail: "Local playlists, follows, favorites, and imported files",
         },
         ShellSection {
             title: "Party",
-            detail: "LAN room controls and permissions",
+            detail: "LAN room controls, discovery, and permissions",
         },
         ShellSection {
             title: "Offline",
-            detail: "Local imports, no YouTube audio persistence",
+            detail: "Imported local files and metadata — no account needed",
         },
     ]
 }
 
 fn offline_policy_text() -> &'static str {
-    if can_persist_youtube_audio() {
-        "YouTube audio persistence is enabled. Verify explicit rights before use."
-    } else {
-        "YouTube audio persistence is disabled. Offline mode uses local files and metadata references."
-    }
+    "Offline mode uses local files and metadata references. No account required."
 }
 
 #[cfg(test)]
@@ -773,9 +768,9 @@ mod tests {
     }
 
     #[test]
-    fn gtk_copy_reflects_core_offline_policy() {
-        assert!(!can_persist_youtube_audio());
-        assert!(offline_policy_text().contains("disabled"));
+    fn gtk_copy_reflects_offline_policy() {
+        assert!(offline_policy_text().contains("local files"));
+        assert!(offline_policy_text().contains("No account"));
     }
 
     #[test]

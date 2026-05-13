@@ -1,5 +1,5 @@
-use std::sync::atomic;
 use std::sync::Arc;
+use std::sync::atomic;
 use std::time::Duration;
 
 use gstreamer::prelude::*;
@@ -101,7 +101,9 @@ impl GstBackend {
     }
 
     fn set_state(&self, state: State) -> Result<(), GstError> {
-        self.playbin.set_state(state).map_err(|_| GstError::StateChange)?;
+        self.playbin
+            .set_state(state)
+            .map_err(|_| GstError::StateChange)?;
         Ok(())
     }
 }

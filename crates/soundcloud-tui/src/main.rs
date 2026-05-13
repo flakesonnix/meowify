@@ -2,7 +2,6 @@ use std::sync::{Arc, Mutex};
 use std::{io, time::Duration};
 
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
-use meowify_core::can_persist_youtube_audio;
 use meowify_party::{
     ConnectionState, DiscoveryEvent, JoinRequest, LanDiscovery, PartyClient, PartyRole,
     PlaybackCommandKind, RoomAnnouncement, RoomServer, RoomVisibility, TrackRef,
@@ -106,10 +105,10 @@ impl View {
     fn detail(self) -> &'static str {
         match self {
             Self::Home => "Status and setup checklist",
-            Self::Search => "YouTube Data API v3 search after OAuth setup",
-            Self::Library => "Local playlists, follows, favorites, and imports",
-            Self::Party => "LAN room state, queue, roles, and permissions",
-            Self::Offline => "Local files and metadata refs; no YouTube audio persistence",
+            Self::Search => "Search tracks and artists in local library",
+            Self::Library => "Local playlists, follows, favorites, and imported files",
+            Self::Party => "LAN room state, queue, roles, permissions, and discovery",
+            Self::Offline => "Imported local files and metadata — no account needed",
         }
     }
 }
@@ -412,11 +411,7 @@ fn navigation(app: &AppState) -> List<'static> {
 
 fn detail_panel(app: &AppState) -> Paragraph<'static> {
     let selected = app.selected_view();
-    let offline_policy = if can_persist_youtube_audio() {
-        "YouTube audio persistence: enabled, verify explicit rights before use"
-    } else {
-        "YouTube audio persistence: disabled; use local imports and metadata refs"
-    };
+    let offline_policy = "Offline mode: local files and metadata — no account required";
 
     let mut lines = vec![
         Line::from(Span::styled(
@@ -517,11 +512,7 @@ fn party_playback_line(snap: &meowify_party::RoomSnapshot) -> String {
 
 fn party_header(app: &AppState, snap: &meowify_party::RoomSnapshot) -> Paragraph<'static> {
     let pb = &snap.playback_state;
-    let offline_policy = if can_persist_youtube_audio() {
-        "YouTube audio persistence: enabled, verify explicit rights before use"
-    } else {
-        "YouTube audio persistence: disabled; use local imports and metadata refs"
-    };
+    let offline_policy = "Offline mode: local files and metadata — no account required";
 
     let lines = vec![
         Line::from(Span::styled(
@@ -749,8 +740,7 @@ mod tests {
     }
 
     #[test]
-    fn tui_guardrails_match_core_and_party_policy() {
-        assert!(!can_persist_youtube_audio());
+    fn tui_guardrails_match_party_rbac_policy() {
         assert!(!can(PartyRole::Client, PartyPermission::ControlPlayback));
     }
 

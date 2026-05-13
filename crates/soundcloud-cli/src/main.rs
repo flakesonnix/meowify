@@ -124,7 +124,7 @@ fn render_command(command: Option<&Command>) -> String {
 
 fn render_status() -> String {
     format!(
-        "Meowify CLI\nplatform: YouTube\nparty protocol: v{PROTOCOL_VERSION}\nnetwork: not started by debug CLI\n"
+        "Meowify CLI\nmode: local-first (no account required)\nparty protocol: v{PROTOCOL_VERSION}\nnetwork: not started by debug CLI\n"
     )
 }
 
@@ -510,10 +510,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn status_reports_youtube_and_protocol_version() {
+    fn status_reports_local_first_and_protocol_version() {
         let output = render_command(Some(&Command::Status));
 
-        assert!(output.contains("platform: YouTube"));
+        assert!(output.contains("local-first"));
         assert!(output.contains("party protocol: v1"));
     }
 
