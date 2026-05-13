@@ -1,5 +1,5 @@
 [package]
-name = "soundcloud-core"
+name = "meowify-core"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

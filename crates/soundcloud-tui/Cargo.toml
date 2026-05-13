@@ -1,5 +1,5 @@
 [package]
-name = "soundcloud-tui"
+name = "meowify-tui"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -9,5 +9,6 @@ rust-version.workspace = true
 [dependencies]
 crossterm.workspace = true
 ratatui.workspace = true
-soundcloud-core = { path = "../soundcloud-core" }
-soundcloud-party = { path = "../soundcloud-party" }
+meowify-core = { path = "../soundcloud-core" }
+meowify-party = { path = "../soundcloud-party" }
+meowify-playback = { path = "../soundcloud-playback" }

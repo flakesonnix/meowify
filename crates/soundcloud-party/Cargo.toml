@@ -1,5 +1,5 @@
 [package]
-name = "soundcloud-party"
+name = "meowify-party"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

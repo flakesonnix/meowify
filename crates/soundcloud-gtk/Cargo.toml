@@ -1,5 +1,5 @@
 [package]
-name = "soundcloud-gtk"
+name = "meowify-gtk"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -7,6 +7,8 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-soundcloud-core = { path = "../soundcloud-core" }
-soundcloud-party = { path = "../soundcloud-party" }
+adw.workspace = true
+gtk.workspace = true
+meowify-core = { path = "../soundcloud-core" }
+meowify-party = { path = "../soundcloud-party" }
 tracing.workspace = true
