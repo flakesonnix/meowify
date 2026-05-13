@@ -1,6 +1,7 @@
 use std::{io, time::Duration};
 
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
+use meowify_core::{AppSettings, Theme};
 use meowify_party::{
     ConnectionState, JoinRequest, LanDiscoveryHandle, PartyClient, PartyRole, PlaybackCommandKind,
     RoomServer, RoomVisibility, TrackRef,
@@ -21,15 +22,17 @@ enum View {
     Library,
     Party,
     Offline,
+    Settings,
 }
 
 impl View {
-    const ALL: [Self; 5] = [
+    const ALL: [Self; 6] = [
         Self::Home,
         Self::Search,
         Self::Library,
         Self::Party,
         Self::Offline,
+        Self::Settings,
     ];
 
     fn title(self) -> &'static str {
@@ -39,6 +42,7 @@ impl View {
             Self::Library => "Library",
             Self::Party => "Party",
             Self::Offline => "Offline",
+            Self::Settings => "Settings",
         }
     }
 
@@ -49,6 +53,7 @@ impl View {
             Self::Library => "Local playlists, follows, favorites, and imported files",
             Self::Party => "LAN room state, queue, roles, permissions, and discovery",
             Self::Offline => "Imported local files and metadata — no account needed",
+            Self::Settings => "Configuration: theme, offline mode, cache, party settings",
         }
     }
 }
@@ -72,11 +77,21 @@ struct AppState {
     gst: Option<GstBackend>,
     volume: f64,
     disco_cursor: usize,
+    settings: AppSettings,
 }
 
 impl Default for AppState {
     fn default() -> Self {
         let gst = GstBackend::new().ok();
+        let settings = AppSettings::default_for_project().unwrap_or(AppSettings {
+            offline_mode: false,
+            cache_dir: std::path::PathBuf::from("/tmp/meowify-cache"),
+            max_cache_size_mb: 512,
+            theme: Theme::System,
+            gtk_compact_mode: false,
+            lan_discovery_enabled: false,
+            bluetooth_experimental_enabled: false,
+        });
         Self {
             selected: 0,
             should_quit: false,
@@ -90,6 +105,7 @@ impl Default for AppState {
             gst,
             volume: 0.8,
             disco_cursor: 0,
+            settings,
         }
     }
 }
@@ -180,6 +196,10 @@ impl AppState {
                 KeyCode::Char('e') => self.end_room(),
                 KeyCode::Char('a') => self.approve_next_pending(),
                 KeyCode::Char('r') => self.reject_next_pending(),
+                KeyCode::Char('o') if self.selected_view() == View::Settings => {
+                    self.toggle_offline_mode()
+                }
+                KeyCode::Char('t') if self.selected_view() == View::Settings => self.cycle_theme(),
                 KeyCode::Enter if self.selected_view() == View::Party => self.join_selected_room(),
                 KeyCode::Char('+') | KeyCode::Char('=') => self.volume_up(),
                 KeyCode::Char('-') | KeyCode::Char('_') => self.volume_down(),
@@ -281,6 +301,27 @@ impl AppState {
             Ok(()) => "room ended".to_string(),
             Err(e) => format!("end failed: {e}"),
         };
+    }
+
+    fn toggle_offline_mode(&mut self) {
+        self.settings.offline_mode = !self.settings.offline_mode;
+        self.last_event = format!(
+            "offline mode: {}",
+            if self.settings.offline_mode {
+                "on"
+            } else {
+                "off"
+            }
+        );
+    }
+
+    fn cycle_theme(&mut self) {
+        self.settings.theme = match self.settings.theme {
+            Theme::System => Theme::Light,
+            Theme::Light => Theme::Dark,
+            Theme::Dark => Theme::System,
+        };
+        self.last_event = format!("theme: {:?}", self.settings.theme);
     }
 
     fn toggle_discovery(&mut self) {
@@ -551,6 +592,8 @@ fn render(frame: &mut Frame, app: &AppState) {
         if let Some(progress_area) = progress_extra {
             render_progress_bar(frame, progress_area, app);
         }
+    } else if app.selected_view() == View::Settings {
+        frame.render_widget(settings_panel(app), layout[1]);
     } else if app.playback.status == PlaybackStatus::Playing {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
@@ -561,6 +604,56 @@ fn render(frame: &mut Frame, app: &AppState) {
     } else {
         frame.render_widget(detail_panel(app), layout[1]);
     }
+}
+
+fn settings_panel(app: &AppState) -> Paragraph<'static> {
+    let s = &app.settings;
+    let lines = vec![
+        Line::from(Span::styled(
+            "Settings",
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        Line::from(format!("Theme:        {:?}   (t to cycle)", s.theme)),
+        Line::from(format!(
+            "Offline mode: {}   (o to toggle)",
+            if s.offline_mode { "ON " } else { "OFF" }
+        )),
+        Line::from(format!("Cache dir:    {}", s.cache_dir.display())),
+        Line::from(format!("Max cache:    {} MB", s.max_cache_size_mb)),
+        Line::from(format!(
+            "GTK compact:  {}",
+            if s.gtk_compact_mode { "ON " } else { "OFF" }
+        )),
+        Line::from(format!(
+            "Bluetooth:    {} (experimental)",
+            if s.bluetooth_experimental_enabled {
+                "ON "
+            } else {
+                "OFF"
+            }
+        )),
+        Line::from(format!("Volume:       {:.0}%", app.volume * 100.0)),
+        Line::from(format!(
+            "GStreamer:    {}",
+            if app.gst.is_some() {
+                "available"
+            } else {
+                "unavailable"
+            }
+        )),
+        Line::from("Commits:      37"),
+        Line::from(""),
+        Line::from(Span::styled(
+            "o: toggle offline  t: cycle theme",
+            Style::default().fg(Color::DarkGray),
+        )),
+    ];
+    Paragraph::new(lines)
+        .block(Block::default().borders(Borders::ALL).title(" Settings "))
+        .wrap(Wrap { trim: true })
 }
 
 fn render_progress_bar(frame: &mut Frame, area: ratatui::layout::Rect, app: &AppState) {
@@ -612,7 +705,7 @@ fn detail_panel(app: &AppState) -> Paragraph<'static> {
 
     let keys = match app.input_mode {
         InputMode::Normal => {
-            "Keys: i import, +/- vol, space play/pause, s stop, n/p skip, j/k nav, q quit"
+            "Keys: i import, +/- vol, space play/pause, s stop, n/p skip, j/k nav, q quit | Settings: o/t"
         }
         InputMode::ImportPath => "Type path, Enter confirm, Esc cancel",
     };
@@ -1007,7 +1100,7 @@ mod tests {
         let mut app = AppState::default();
 
         app.previous();
-        assert_eq!(app.selected_view(), View::Offline);
+        assert_eq!(app.selected_view(), View::Settings);
 
         app.next();
         assert_eq!(app.selected_view(), View::Home);
@@ -1253,6 +1346,46 @@ mod tests {
 
         assert_eq!(app.input_mode, InputMode::Normal);
         assert!(app.last_event.contains("file not found"));
+    }
+
+    #[test]
+    fn settings_view_is_navigable() {
+        assert_eq!(View::ALL.len(), 6);
+        assert_eq!(View::Settings.title(), "Settings");
+    }
+
+    #[test]
+    fn toggle_offline_mode_switches() {
+        let mut app = AppState::default();
+        assert!(!app.settings.offline_mode);
+        app.toggle_offline_mode();
+        assert!(app.settings.offline_mode);
+        app.toggle_offline_mode();
+        assert!(!app.settings.offline_mode);
+    }
+
+    #[test]
+    fn cycle_theme_rotates() {
+        let mut app = AppState::default();
+        assert_eq!(app.settings.theme, Theme::System);
+        app.cycle_theme();
+        assert_eq!(app.settings.theme, Theme::Light);
+        app.cycle_theme();
+        assert_eq!(app.settings.theme, Theme::Dark);
+        app.cycle_theme();
+        assert_eq!(app.settings.theme, Theme::System);
+    }
+
+    #[test]
+    fn settings_panel_includes_all_options() {
+        let app = AppState::default();
+        let panel = settings_panel(&app);
+        let content = format!("{panel:?}");
+        assert!(content.contains("Theme"));
+        assert!(content.contains("Offline"));
+        assert!(content.contains("Cache"));
+        assert!(content.contains("Volume"));
+        assert!(content.contains("GStreamer"));
     }
 
     #[test]
