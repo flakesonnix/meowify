@@ -274,6 +274,22 @@ impl RoomServer {
         Ok(())
     }
 
+    /// Called by the server when the admin client's connection is lost.
+    /// Pauses the room so clients know playback should stop until the admin returns.
+    pub fn pause_by_admin_disconnect(&mut self) {
+        if matches!(self.room.state, RoomState::Active | RoomState::Locked) {
+            self.room.state = RoomState::PausedByAdminDisconnect;
+        }
+    }
+
+    /// Called when the admin client reconnects after a disconnect.
+    /// Restores the room to Active state.
+    pub fn resume_after_admin_reconnect(&mut self) {
+        if self.room.state == RoomState::PausedByAdminDisconnect {
+            self.room.state = RoomState::Active;
+        }
+    }
+
     pub fn apply_playback_command(
         &mut self,
         issuer_id: &str,
@@ -563,6 +579,56 @@ mod tests {
 
         server.end_room("admin-1").unwrap();
         assert_eq!(server.room().state, RoomState::Ended);
+    }
+
+    #[test]
+    fn admin_disconnect_pauses_active_room() {
+        let mut server = make_server();
+        add_client(&mut server, "client-1");
+
+        assert_eq!(server.room().state, RoomState::Active);
+        server.pause_by_admin_disconnect();
+        assert_eq!(server.room().state, RoomState::PausedByAdminDisconnect);
+    }
+
+    #[test]
+    fn admin_reconnect_restores_active_state() {
+        let mut server = make_server();
+        add_client(&mut server, "client-1");
+        server.pause_by_admin_disconnect();
+
+        server.resume_after_admin_reconnect();
+        assert_eq!(server.room().state, RoomState::Active);
+    }
+
+    #[test]
+    fn pause_is_no_op_when_room_already_ended() {
+        let mut server = make_server();
+        server.end_room("admin-1").unwrap();
+
+        server.pause_by_admin_disconnect();
+
+        assert_eq!(server.room().state, RoomState::Ended);
+    }
+
+    #[test]
+    fn resume_is_no_op_when_room_was_not_paused() {
+        let mut server = make_server();
+        add_client(&mut server, "client-1");
+
+        server.resume_after_admin_reconnect();
+
+        assert_eq!(server.room().state, RoomState::Active);
+    }
+
+    #[test]
+    fn locked_room_also_pauses_on_admin_disconnect() {
+        let mut server = make_server();
+        add_client(&mut server, "client-1");
+        server.lock_room("admin-1").unwrap();
+
+        server.pause_by_admin_disconnect();
+        assert_eq!(server.room().state, RoomState::PausedByAdminDisconnect);
     }
 
     #[test]
