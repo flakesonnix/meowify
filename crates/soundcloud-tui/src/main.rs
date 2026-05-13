@@ -132,6 +132,7 @@ struct AppState {
     imported_count: usize,
     gst: Option<GstBackend>,
     volume: f64,
+    disco_cursor: usize,
 }
 
 impl Default for AppState {
@@ -149,6 +150,7 @@ impl Default for AppState {
             imported_count: 0,
             gst,
             volume: 0.8,
+            disco_cursor: 0,
         }
     }
 }
@@ -193,8 +195,42 @@ impl AppState {
             },
             InputMode::Normal => match code {
                 KeyCode::Char('q') | KeyCode::Esc => self.should_quit = true,
-                KeyCode::Down | KeyCode::Char('j') => self.next(),
-                KeyCode::Up | KeyCode::Char('k') => self.previous(),
+                KeyCode::Down | KeyCode::Char('j') => {
+                    if self.selected_view() == View::Party && self.discovery.is_some() {
+                        let n = self
+                            .discovery
+                            .as_ref()
+                            .map(|d| d.discovered_rooms().len())
+                            .unwrap_or(0);
+                        if n > 0 {
+                            self.disco_cursor = (self.disco_cursor + 1) % n;
+                            self.last_event =
+                                format!("selected room {}/{}", self.disco_cursor + 1, n);
+                            return;
+                        }
+                    }
+                    self.next();
+                }
+                KeyCode::Up | KeyCode::Char('k') => {
+                    if self.selected_view() == View::Party && self.discovery.is_some() {
+                        let n = self
+                            .discovery
+                            .as_ref()
+                            .map(|d| d.discovered_rooms().len())
+                            .unwrap_or(0);
+                        if n > 0 {
+                            self.disco_cursor = if self.disco_cursor == 0 {
+                                n - 1
+                            } else {
+                                self.disco_cursor - 1
+                            };
+                            self.last_event =
+                                format!("selected room {}/{}", self.disco_cursor + 1, n);
+                            return;
+                        }
+                    }
+                    self.previous();
+                }
                 KeyCode::Char(' ') => self.toggle_playback(),
                 KeyCode::Char('s') => self.stop_playback(),
                 KeyCode::Char('n') => self.skip_next(),
@@ -205,6 +241,7 @@ impl AppState {
                 KeyCode::Char('e') => self.end_room(),
                 KeyCode::Char('a') => self.approve_next_pending(),
                 KeyCode::Char('r') => self.reject_next_pending(),
+                KeyCode::Enter if self.selected_view() == View::Party => self.join_selected_room(),
                 KeyCode::Char('+') | KeyCode::Char('=') => self.volume_up(),
                 KeyCode::Char('-') | KeyCode::Char('_') => self.volume_down(),
                 KeyCode::Char('i') => {
@@ -232,6 +269,35 @@ impl AppState {
             gst.set_volume(self.volume);
         }
         self.last_event = format!("volume: {:.0}%", self.volume * 100.0);
+    }
+
+    fn join_selected_room(&mut self) {
+        let rooms = match self.discovery {
+            Some(ref d) => d.discovered_rooms(),
+            None => {
+                self.last_event = "no discovery running — press d to start".to_string();
+                return;
+            }
+        };
+        if rooms.is_empty() {
+            self.last_event = "no rooms discovered yet".to_string();
+            return;
+        }
+        if self.disco_cursor >= rooms.len() {
+            self.disco_cursor = 0;
+        }
+        let room = &rooms[self.disco_cursor];
+        let request_id = format!("req-join-{}", room.room_id);
+        let _ = self.room.handle_join_request(JoinRequest {
+            request_id: request_id.clone(),
+            room_id: room.room_id.clone(),
+            client_id: format!("client-{}", room.room_id),
+            user_name: room.admin_name.clone(),
+            device_name: room.admin_name.clone(),
+            invite_code_attempt: None,
+            requested_at_ms: 9999,
+        });
+        self.last_event = format!("join request sent to room: {}", room.room_name);
     }
 
     fn do_import(&mut self) {
@@ -819,7 +885,8 @@ fn party_center_panel(app: &AppState, snap: &meowify_party::RoomSnapshot) -> Lis
 
     if let Some(discovery) = &app.discovery {
         let rooms = discovery.discovered_rooms();
-        let disc_header = format!("Discovered rooms ({}):", rooms.len());
+        let n = rooms.len();
+        let disc_header = format!("Discovered rooms ({n}):");
         items.push(
             ListItem::new(Line::from(Span::styled(
                 disc_header,
@@ -827,17 +894,33 @@ fn party_center_panel(app: &AppState, snap: &meowify_party::RoomSnapshot) -> Lis
             )))
             .style(Style::default()),
         );
-        for room in rooms {
-            let name = room.room_name;
+        for (i, room) in rooms.iter().enumerate() {
+            let name = room.room_name.clone();
             let vis = format!("{:?}", room.visibility);
+            let is_selected = i == app.disco_cursor;
+            let style = if is_selected {
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::Green)
+            };
+            let prefix = if is_selected { " >" } else { "  " };
             items.push(
                 ListItem::new(Line::from(vec![
-                    Span::styled("  ", Style::default()),
-                    Span::styled(name, Style::default().fg(Color::Green)),
+                    Span::styled(prefix, style),
+                    Span::styled(" ", Style::default()),
+                    Span::styled(name, style),
                     Span::raw(format!(" ({vis})")),
                 ]))
-                .style(Style::default()),
+                .style(style),
             );
+        }
+        if n > 0 {
+            items.push(ListItem::new(Line::from(Span::styled(
+                "  Enter to join, j/k to navigate",
+                Style::default().fg(Color::DarkGray),
+            ))));
         }
         items.push(ListItem::new(Line::from("")));
     } else {
