@@ -1,3 +1,5 @@
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::{cell::RefCell, rc::Rc};
 
 use adw::prelude::*;
@@ -9,6 +11,8 @@ use meowify_party::{
 use meowify_playback::gst::GstBackend;
 use meowify_playback::{PlaybackError, PlaybackState, PlaybackStatus};
 
+mod mpris;
+
 const APP_ID: &str = "dev.meowify.Meowify";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -18,6 +22,9 @@ struct ShellSection {
 }
 
 fn main() -> glib::ExitCode {
+    let mpris_state = mpris::MprisState::new();
+    mpris::spawn_mpris(mpris_state, "Meowify");
+
     let app = adw::Application::builder().application_id(APP_ID).build();
     app.connect_activate(build_ui);
     app.run()
