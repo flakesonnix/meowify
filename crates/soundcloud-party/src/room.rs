@@ -108,11 +108,20 @@ impl RoomServer {
         &self.playback
     }
 
+    pub fn join_requests(&self) -> impl Iterator<Item = &JoinRequest> {
+        self.join_requests.values()
+    }
+
     pub fn snapshot(&self) -> RoomSnapshot {
+        let mut members: Vec<PartyClient> = self.clients.values().cloned().collect();
+        members.sort_by(|a, b| a.client_id.cmp(&b.client_id));
+        let mut pending: Vec<JoinRequest> = self.join_requests.values().cloned().collect();
+        pending.sort_by(|a, b| a.request_id.cmp(&b.request_id));
         RoomSnapshot {
             room: self.room.clone(),
             current_admin: self.room.admin_client_id.clone(),
-            members: self.clients.values().cloned().collect(),
+            members,
+            pending_requests: pending,
             queue: self.queue.clone(),
             playback_state: self.playback.clone(),
             protocol_version: PROTOCOL_VERSION,
@@ -772,6 +781,58 @@ mod tests {
         assert_eq!(snapshot.room.room_id, "room-1");
         assert_eq!(snapshot.members.len(), 2);
         assert_eq!(snapshot.queue.len(), 1);
+        assert_eq!(snapshot.pending_requests.len(), 0);
         assert_eq!(snapshot.protocol_version, PROTOCOL_VERSION);
+    }
+
+    #[test]
+    fn snapshot_includes_pending_join_requests() {
+        let mut server = make_server();
+        server
+            .handle_join_request(join_request("client-1"))
+            .unwrap();
+        server
+            .handle_join_request(join_request("client-2"))
+            .unwrap();
+
+        let snap = server.snapshot();
+
+        assert_eq!(snap.pending_requests.len(), 2);
+        let client_ids: Vec<&str> = snap
+            .pending_requests
+            .iter()
+            .map(|r| r.client_id.as_str())
+            .collect();
+        assert!(client_ids.contains(&"client-1"));
+        assert!(client_ids.contains(&"client-2"));
+    }
+
+    #[test]
+    fn snapshot_members_are_sorted_by_client_id() {
+        let mut server = make_server();
+        add_client(&mut server, "zzz-client");
+        add_client(&mut server, "aaa-client");
+
+        let snap = server.snapshot();
+        let ids: Vec<&str> = snap.members.iter().map(|m| m.client_id.as_str()).collect();
+
+        assert_eq!(ids, vec!["aaa-client", "admin-1", "zzz-client"]);
+    }
+
+    #[test]
+    fn approved_request_is_removed_from_pending() {
+        let mut server = make_server();
+        server
+            .handle_join_request(join_request("client-1"))
+            .unwrap();
+
+        assert_eq!(server.snapshot().pending_requests.len(), 1);
+
+        server
+            .approve_join("admin-1", "req-client-1", PartyRole::Client, 2000)
+            .unwrap();
+
+        assert_eq!(server.snapshot().pending_requests.len(), 0);
+        assert_eq!(server.snapshot().members.len(), 2);
     }
 }

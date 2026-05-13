@@ -138,6 +138,7 @@ pub struct RoomSnapshot {
     pub room: PartyRoom,
     pub current_admin: ClientId,
     pub members: Vec<PartyClient>,
+    pub pending_requests: Vec<JoinRequest>,
     pub queue: Vec<PartyQueueItem>,
     pub playback_state: PlaybackSyncState,
     pub protocol_version: u32,
