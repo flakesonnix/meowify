@@ -3,7 +3,7 @@ use std::fmt::Write as _;
 use clap::{Parser, Subcommand, ValueEnum};
 use meowify_party::{
     ConnectionState, JoinRequest, PROTOCOL_VERSION, PartyClient, PartyPermission, PartyRole,
-    PlaybackCommandKind, RoomServer, RoomVisibility, TrackRef, can,
+    PlaybackCommandKind, RoomServer, RoomState, RoomVisibility, TrackRef, can,
 };
 
 #[derive(Debug, Parser)]
@@ -73,6 +73,10 @@ enum PartyCommand {
             help = "Output machine-readable JSON instead of human-readable text"
         )]
         json: bool,
+        #[arg(long, value_enum, help = "Only output if room is in this state")]
+        filter_state: Option<RoomStateArg>,
+        #[arg(long, help = "Only output if room has at least this many members")]
+        filter_min_members: Option<usize>,
     },
 }
 
@@ -82,6 +86,26 @@ enum RoleArg {
     Moderator,
     Client,
     Guest,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum RoomStateArg {
+    Waiting,
+    Active,
+    Locked,
+    Ended,
+}
+
+impl RoomStateArg {
+    fn matches(self, state: RoomState) -> bool {
+        matches!(
+            (self, state),
+            (Self::Waiting, RoomState::WaitingForClients)
+                | (Self::Active, RoomState::Active)
+                | (Self::Locked, RoomState::Locked)
+                | (Self::Ended, RoomState::Ended)
+        )
+    }
 }
 
 fn main() {
@@ -157,7 +181,11 @@ fn render_party_command(command: &PartyCommand) -> String {
             Some(PartyPermission::SuggestTrack),
         ),
         PartyCommand::Permissions { role } => render_permissions(*role),
-        PartyCommand::Snapshot { json } => render_snapshot(*json),
+        PartyCommand::Snapshot {
+            json,
+            filter_state,
+            filter_min_members,
+        } => render_snapshot(*json, *filter_state, *filter_min_members),
     }
 }
 
@@ -201,7 +229,11 @@ fn render_permissions(role_filter: Option<RoleArg>) -> String {
     output
 }
 
-fn render_snapshot(json: bool) -> String {
+fn render_snapshot(
+    json: bool,
+    filter_state: Option<RoomStateArg>,
+    filter_min_members: Option<usize>,
+) -> String {
     let admin = PartyClient {
         client_id: "admin-1".to_string(),
         device_name: "laptop".to_string(),
@@ -276,6 +308,18 @@ fn render_snapshot(json: bool) -> String {
         .unwrap();
 
     let snap = server.snapshot();
+
+    if let Some(state_filter) = filter_state {
+        if !state_filter.matches(snap.room.state) {
+            return "No rooms match the filter.\n".to_string();
+        }
+    }
+    if let Some(min) = filter_min_members {
+        if snap.members.len() < min {
+            return "No rooms match the filter.\n".to_string();
+        }
+    }
+
     if json {
         serde_json::to_string_pretty(&snap).expect("RoomSnapshot serializes")
     } else {
@@ -475,7 +519,7 @@ mod tests {
 
     #[test]
     fn snapshot_renders_room_members_queue_and_playback() {
-        let output = render_snapshot(false);
+        let output = render_snapshot(false, None, None);
 
         assert!(output.contains("room-demo"));
         assert!(output.contains("Demo Room"));
@@ -491,7 +535,7 @@ mod tests {
 
     #[test]
     fn snapshot_json_output_is_valid_json_with_expected_fields() {
-        let output = render_snapshot(true);
+        let output = render_snapshot(true, None, None);
 
         let value: serde_json::Value = serde_json::from_str(&output).expect("valid JSON");
         assert_eq!(value["room"]["room_id"], "room-demo");
@@ -501,5 +545,37 @@ mod tests {
         assert_eq!(value["members"].as_array().unwrap().len(), 2);
         assert_eq!(value["queue"].as_array().unwrap().len(), 2);
         assert!(value["playback_state"]["is_playing"].as_bool().unwrap());
+    }
+
+    #[test]
+    fn snapshot_filter_state_active_matches_demo_room() {
+        let output = render_snapshot(false, Some(RoomStateArg::Active), None);
+        assert!(output.contains("room-demo"));
+        assert!(!output.contains("No rooms match"));
+    }
+
+    #[test]
+    fn snapshot_filter_state_locked_excludes_active_demo_room() {
+        let output = render_snapshot(false, Some(RoomStateArg::Locked), None);
+        assert_eq!(output, "No rooms match the filter.\n");
+    }
+
+    #[test]
+    fn snapshot_filter_min_members_two_passes() {
+        let output = render_snapshot(false, None, Some(2));
+        assert!(output.contains("room-demo"));
+    }
+
+    #[test]
+    fn snapshot_filter_min_members_three_excludes() {
+        let output = render_snapshot(false, None, Some(3));
+        assert_eq!(output, "No rooms match the filter.\n");
+    }
+
+    #[test]
+    fn snapshot_filter_active_and_json_combined() {
+        let output = render_snapshot(true, Some(RoomStateArg::Active), Some(2));
+        let value: serde_json::Value = serde_json::from_str(&output).expect("valid JSON");
+        assert_eq!(value["room"]["room_id"], "room-demo");
     }
 }
