@@ -1,30 +1,27 @@
 # Meowify
 
-Meowify is an experimental SoundCloud desktop and terminal client written primarily in Rust.
+Multi-platform media client supporting YouTube and SoundCloud, written in Rust.
+Works fully offline/local-first with LAN party mode — no account required for local features.
 
-It is not an official SoundCloud app. It must use documented SoundCloud APIs only and must respect SoundCloud API Terms, uploader rights, authentication requirements, and playback/download restrictions.
+## Interfaces
+- GTK4/libadwaita desktop app with GStreamer audio.
+- Ratatui/Crossterm terminal app with GStreamer audio.
+- Debug/admin CLI with snapshot output.
 
-## Planned Interfaces
-- GTK4/libadwaita desktop app.
-- Ratatui/Crossterm terminal app.
-- Debug/admin CLI.
-
-## Planned Crates
-- `soundcloud-core`: API, auth, config, SQLite, local library, playlists, local follows/favorites, metadata cache.
-- `soundcloud-playback`: playback abstraction, queue, repeat/shuffle, GStreamer backend.
-- `soundcloud-party`: LAN-only room mode, protocol, roles, permissions, playback sync.
-- `soundcloud-gtk`: GTK4/libadwaita frontend.
-- `soundcloud-tui`: Ratatui frontend.
-- `soundcloud-cli`: debugging/admin CLI.
+## Crates
+- `soundcloud-core`: YouTube Data API v3 + SoundCloud API client, OAuth2, config, SQLite, local library, playlists, follows/favorites, cache.
+- `soundcloud-playback`: playback abstraction, GStreamer backend, queue, repeat/shuffle, volume.
+- `soundcloud-party`: LAN room/party mode, libp2p mDNS discovery, protocol, RBAC, playback sync.
+- `soundcloud-gtk`: GTK4/libadwaita frontend with party controls and file import.
+- `soundcloud-tui`: Ratatui frontend with party controls, file import, and progress bar.
+- `soundcloud-cli`: debugging/admin CLI with snapshot filters.
 
 ## Legal And API Rules
-- No scraping.
-- No stream ripping.
+- No scraping or stream ripping for either platform.
 - No bypassing playback/download restrictions.
-- No redistributing SoundCloud audio.
-- No persistent SoundCloud audio downloads or offline cache unless SoundCloud terms and rights explicitly allow it.
-- Offline mode uses local imports, local metadata, and SoundCloud references marked unavailable when needed.
-- User actions such as likes, follows, comments, playlist edits, uploads, and playback must be explicitly initiated by the authenticated user.
+- No redistributing protected audio in party mode.
+- Offline mode uses local imports, metadata references, and marked-unavailable placeholders.
+- User actions (likes, follows, comments, etc.) must be explicitly initiated by the authenticated user.
 
 ## Development
 ```sh
@@ -39,5 +36,5 @@ just run-gtk
 just run-tui
 ```
 
-## SoundCloud Credentials
-Register an app with SoundCloud and provide credentials through environment variables or settings. Do not commit client secrets or tokens.
+## API Credentials
+Register an app with YouTube and/or SoundCloud as needed. Provide credentials through environment variables or settings. Do not commit client secrets or tokens. The app works fully offline without any credentials.
