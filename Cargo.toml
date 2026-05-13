@@ -36,6 +36,6 @@ crossterm = "0.29"
 gstreamer = "0.25"
 gstreamer-player = "0.25"
 keyring = "4"
-libp2p = { version = "0.56", default-features = false, features = ["tokio", "tcp", "quic", "noise", "yamux", "mdns", "request-response", "macros"] }
+libp2p = { version = "0.56", default-features = false, features = ["tokio", "tcp", "quic", "noise", "yamux", "mdns", "request-response", "json", "macros"] }
 bluer = { version = "0.17", default-features = false, features = ["bluetoothd", "serde"] }
 sha2 = "0.10"

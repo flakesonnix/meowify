@@ -2,21 +2,23 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use libp2p::{
-    Multiaddr, PeerId,
+    Multiaddr, PeerId, StreamProtocol,
     futures::StreamExt as _,
     mdns, noise,
+    request_response::{self, ProtocolSupport, json as rr_json},
     swarm::{NetworkBehaviour, SwarmEvent},
     tcp, yamux,
 };
+use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 
 use crate::model::{RoomId, RoomVisibility};
 use crate::protocol::PROTOCOL_VERSION;
 
-/// Payload broadcast to peers discovered on the LAN.
-/// Room announcement exchange (request-response) is a follow-on slice;
-/// this type defines what will be sent.
-#[derive(Debug, Clone, PartialEq, Eq)]
+const ANNOUNCE_PROTOCOL: &str = "/meowify/announce/1";
+
+/// Room metadata broadcast to peers discovered on the LAN.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RoomAnnouncement {
     pub room_id: RoomId,
     pub room_name: String,
@@ -42,7 +44,7 @@ impl RoomAnnouncement {
     }
 }
 
-/// Events emitted by [`LanDiscovery`] as peers appear/disappear on the LAN.
+/// Events emitted by [`LanDiscovery`] as peers appear/disappear or announce rooms.
 #[derive(Debug, Clone)]
 pub enum DiscoveryEvent {
     PeerDiscovered {
@@ -52,27 +54,47 @@ pub enum DiscoveryEvent {
     PeerExpired {
         peer_id: PeerId,
     },
+    RoomAnnounced {
+        peer_id: PeerId,
+        announcement: RoomAnnouncement,
+    },
+    RoomExpired {
+        peer_id: PeerId,
+        room_id: RoomId,
+    },
 }
+
+// ── NetworkBehaviour ──────────────────────────────────────────────────────────
+//
+// Request = RoomAnnouncement (initiator's room, mandatory)
+// Response = Option<RoomAnnouncement> (responder's room, optional)
+
+type AnnounceEvent = request_response::Event<RoomAnnouncement, Option<RoomAnnouncement>>;
 
 #[derive(NetworkBehaviour)]
 struct DiscoveryBehaviour {
     mdns: mdns::tokio::Behaviour,
+    announce: rr_json::Behaviour<RoomAnnouncement, Option<RoomAnnouncement>>,
 }
 
-/// mDNS-based LAN peer discovery.
+// ── LanDiscovery ─────────────────────────────────────────────────────────────
+
+/// mDNS-based LAN peer discovery with JSON room announcement exchange.
 ///
-/// Constructs a libp2p swarm with mDNS behaviour. Call [`run`] to drive the
-/// event loop; events are forwarded to the provided `mpsc::Sender`. Room
-/// announcement exchange (request-response) is added in a follow-on slice.
-///
-/// [`run`]: LanDiscovery::run
+/// On mDNS peer discovery, sends the local `RoomAnnouncement` (if set) as a
+/// request-response request. Handles inbound requests by replying with the
+/// local announcement. Emits `DiscoveryEvent`s over the provided channel.
 pub struct LanDiscovery {
     swarm: libp2p::Swarm<DiscoveryBehaviour>,
     peers: HashMap<PeerId, Vec<Multiaddr>>,
+    known_rooms: HashMap<PeerId, RoomAnnouncement>,
+    local_announcement: Option<RoomAnnouncement>,
 }
 
 impl LanDiscovery {
-    pub fn new() -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+    pub fn new(
+        local_announcement: Option<RoomAnnouncement>,
+    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let mut swarm = libp2p::SwarmBuilder::with_new_identity()
             .with_tokio()
             .with_tcp(
@@ -86,6 +108,13 @@ impl LanDiscovery {
                         mdns::Config::default(),
                         key.public().to_peer_id(),
                     )?,
+                    announce: rr_json::Behaviour::new(
+                        [(
+                            StreamProtocol::new(ANNOUNCE_PROTOCOL),
+                            ProtocolSupport::Full,
+                        )],
+                        request_response::Config::default(),
+                    ),
                 })
             })?
             .with_swarm_config(|c| c.with_idle_connection_timeout(Duration::from_secs(60)))
@@ -96,6 +125,8 @@ impl LanDiscovery {
         Ok(Self {
             swarm,
             peers: HashMap::new(),
+            known_rooms: HashMap::new(),
+            local_announcement,
         })
     }
 
@@ -107,47 +138,125 @@ impl LanDiscovery {
         &self.peers
     }
 
-    /// Drive the mDNS event loop, forwarding peer-discovered/expired events to
-    /// `event_tx`. Returns when the channel receiver is dropped.
+    pub fn known_rooms(&self) -> &HashMap<PeerId, RoomAnnouncement> {
+        &self.known_rooms
+    }
+
+    pub fn set_local_announcement(&mut self, announcement: Option<RoomAnnouncement>) {
+        self.local_announcement = announcement;
+    }
+
+    /// Drive the event loop. Returns when the `event_tx` receiver is dropped.
     pub async fn run(mut self, event_tx: mpsc::Sender<DiscoveryEvent>) {
         loop {
             tokio::select! {
                 event = self.swarm.select_next_some() => {
-                    match event {
-                        SwarmEvent::Behaviour(DiscoveryBehaviourEvent::Mdns(
-                            mdns::Event::Discovered(peers),
-                        )) => {
-                            for (peer_id, addr) in peers {
-                                self.peers.entry(peer_id).or_default().push(addr);
-                                let addresses = self.peers[&peer_id].clone();
-                                if event_tx
-                                    .send(DiscoveryEvent::PeerDiscovered { peer_id, addresses })
-                                    .await
-                                    .is_err()
-                                {
-                                    return;
-                                }
-                            }
-                        }
-                        SwarmEvent::Behaviour(DiscoveryBehaviourEvent::Mdns(
-                            mdns::Event::Expired(peers),
-                        )) => {
-                            for (peer_id, _) in peers {
-                                self.peers.remove(&peer_id);
-                                if event_tx
-                                    .send(DiscoveryEvent::PeerExpired { peer_id })
-                                    .await
-                                    .is_err()
-                                {
-                                    return;
-                                }
-                            }
-                        }
-                        _ => {}
+                    if self.handle_swarm_event(event, &event_tx).await.is_err() {
+                        return;
                     }
                 }
             }
         }
+    }
+
+    async fn handle_swarm_event(
+        &mut self,
+        event: SwarmEvent<DiscoveryBehaviourEvent>,
+        event_tx: &mpsc::Sender<DiscoveryEvent>,
+    ) -> Result<(), ()> {
+        match event {
+            SwarmEvent::Behaviour(DiscoveryBehaviourEvent::Mdns(mdns::Event::Discovered(
+                peers,
+            ))) => {
+                for (peer_id, addr) in peers {
+                    self.peers.entry(peer_id).or_default().push(addr);
+                    let addresses = self.peers[&peer_id].clone();
+
+                    if let Some(ann) = &self.local_announcement {
+                        self.swarm
+                            .behaviour_mut()
+                            .announce
+                            .send_request(&peer_id, ann.clone());
+                    }
+
+                    event_tx
+                        .send(DiscoveryEvent::PeerDiscovered { peer_id, addresses })
+                        .await
+                        .map_err(|_| ())?;
+                }
+            }
+
+            SwarmEvent::Behaviour(DiscoveryBehaviourEvent::Mdns(mdns::Event::Expired(peers))) => {
+                for (peer_id, _) in peers {
+                    self.peers.remove(&peer_id);
+
+                    if let Some(room) = self.known_rooms.remove(&peer_id) {
+                        event_tx
+                            .send(DiscoveryEvent::RoomExpired {
+                                peer_id,
+                                room_id: room.room_id,
+                            })
+                            .await
+                            .map_err(|_| ())?;
+                    }
+
+                    event_tx
+                        .send(DiscoveryEvent::PeerExpired { peer_id })
+                        .await
+                        .map_err(|_| ())?;
+                }
+            }
+
+            // Inbound: remote peer sent us their RoomAnnouncement.
+            SwarmEvent::Behaviour(DiscoveryBehaviourEvent::Announce(AnnounceEvent::Message {
+                peer,
+                message:
+                    request_response::Message::Request {
+                        request, channel, ..
+                    },
+                ..
+            })) => {
+                self.known_rooms.insert(peer, request.clone());
+                let response = self.local_announcement.clone();
+                let _ = self
+                    .swarm
+                    .behaviour_mut()
+                    .announce
+                    .send_response(channel, response);
+
+                event_tx
+                    .send(DiscoveryEvent::RoomAnnounced {
+                        peer_id: peer,
+                        announcement: request,
+                    })
+                    .await
+                    .map_err(|_| ())?;
+            }
+
+            // Outbound: remote peer replied with their announcement.
+            SwarmEvent::Behaviour(DiscoveryBehaviourEvent::Announce(AnnounceEvent::Message {
+                peer,
+                message:
+                    request_response::Message::Response {
+                        response: Some(announcement),
+                        ..
+                    },
+                ..
+            })) => {
+                self.known_rooms.insert(peer, announcement.clone());
+                event_tx
+                    .send(DiscoveryEvent::RoomAnnounced {
+                        peer_id: peer,
+                        announcement,
+                    })
+                    .await
+                    .map_err(|_| ())?;
+            }
+
+            _ => {}
+        }
+
+        Ok(())
     }
 }
 
@@ -172,16 +281,28 @@ mod tests {
         assert_eq!(ann.visibility, RoomVisibility::Private);
     }
 
+    #[test]
+    fn room_announcement_roundtrips_json() {
+        let ann = RoomAnnouncement::new("room-3", "LAN Party", RoomVisibility::Open, "Carol");
+        let json = serde_json::to_string(&ann).unwrap();
+        let decoded: RoomAnnouncement = serde_json::from_str(&json).unwrap();
+        assert_eq!(ann, decoded);
+    }
+
     #[tokio::test]
-    async fn lan_discovery_constructs_and_has_unique_peer_id() {
-        let d1 = LanDiscovery::new().expect("first LanDiscovery::new should succeed");
-        let d2 = LanDiscovery::new().expect("second LanDiscovery::new should succeed");
-        assert_ne!(
-            d1.local_peer_id(),
-            d2.local_peer_id(),
-            "each instance gets a fresh identity"
-        );
+    async fn lan_discovery_constructs_with_and_without_local_announcement() {
+        let d1 = LanDiscovery::new(None).expect("no-announcement instance");
+        let d2 = LanDiscovery::new(Some(RoomAnnouncement::new(
+            "room-x",
+            "My Room",
+            RoomVisibility::LanVisible,
+            "Host",
+        )))
+        .expect("with-announcement instance");
+
+        assert_ne!(d1.local_peer_id(), d2.local_peer_id());
         assert!(d1.known_peers().is_empty());
-        assert!(d2.known_peers().is_empty());
+        assert!(d1.known_rooms().is_empty());
+        assert!(d2.known_rooms().is_empty());
     }
 }
