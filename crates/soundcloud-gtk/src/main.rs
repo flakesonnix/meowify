@@ -384,11 +384,50 @@ fn party_state_text(snap: &RoomSnapshot) -> String {
 }
 
 fn party_members_text(snap: &RoomSnapshot) -> String {
-    format!("Members: {}", snap.members.len())
+    let mut members = snap.members.clone();
+    members.sort_by(|a, b| a.client_id.cmp(&b.client_id));
+    let header = format!("Members ({}):", members.len());
+    let rows: Vec<String> = members
+        .iter()
+        .map(|m| format!("  {:?} | {} | {}", m.role, m.client_id, m.user_name))
+        .collect();
+    std::iter::once(header)
+        .chain(rows)
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn party_queue_text(snap: &RoomSnapshot) -> String {
-    format!("Queue: {} item(s)", snap.queue.len())
+    let header = format!("Queue ({} item(s)):", snap.queue.len());
+    if snap.queue.is_empty() {
+        return format!("{header}\n  (empty)");
+    }
+    let rows: Vec<String> = snap
+        .queue
+        .iter()
+        .map(|item| {
+            let title = match &item.track_ref {
+                TrackRef::YouTube {
+                    title,
+                    channel_title,
+                    ..
+                } => format!(
+                    "{} — {}",
+                    title.as_deref().unwrap_or("(no title)"),
+                    channel_title.as_deref().unwrap_or("(no channel)")
+                ),
+                TrackRef::ImportedLocalFile { title, .. } => format!("[local] {title}"),
+            };
+            format!(
+                "  {} | votes:{:+} | {}",
+                item.queue_item_id, item.votes, title
+            )
+        })
+        .collect();
+    std::iter::once(header)
+        .chain(rows)
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn party_playback_text(snap: &RoomSnapshot) -> String {
@@ -640,6 +679,84 @@ mod tests {
         let snap = server.snapshot();
 
         assert_eq!(party_playback_text(&snap), "Playback: idle");
+    }
+
+    #[test]
+    fn party_members_text_lists_each_member() {
+        use meowify_party::{
+            ConnectionState, JoinRequest, PartyClient, PartyRole, RoomServer, RoomVisibility,
+        };
+        let admin = PartyClient {
+            client_id: "admin-1".to_string(),
+            device_name: "laptop".to_string(),
+            user_name: "Alice".to_string(),
+            role: PartyRole::Admin,
+            permissions_override: Vec::new(),
+            connected_at_ms: 0,
+            last_seen_ms: 0,
+            connection_state: ConnectionState::Connected,
+        };
+        let mut server =
+            RoomServer::create("r1", "Room", RoomVisibility::LanVisible, admin, "inv", 0);
+        server
+            .handle_join_request(JoinRequest {
+                request_id: "req-bob".to_string(),
+                room_id: "r1".to_string(),
+                client_id: "client-bob".to_string(),
+                user_name: "Bob".to_string(),
+                device_name: "phone".to_string(),
+                invite_code_attempt: None,
+                requested_at_ms: 100,
+            })
+            .unwrap();
+        server
+            .approve_join("admin-1", "req-bob", PartyRole::Client, 200)
+            .unwrap();
+        let snap = server.snapshot();
+
+        let text = party_members_text(&snap);
+        assert!(text.contains("Members (2):"));
+        assert!(text.contains("Alice"));
+        assert!(text.contains("Bob"));
+        assert!(text.contains("Admin"));
+        assert!(text.contains("Client"));
+    }
+
+    #[test]
+    fn party_queue_text_lists_track_titles() {
+        use meowify_party::{
+            ConnectionState, PartyClient, PartyRole, RoomServer, RoomVisibility, TrackRef,
+        };
+        let admin = PartyClient {
+            client_id: "admin-1".to_string(),
+            device_name: "laptop".to_string(),
+            user_name: "Admin".to_string(),
+            role: PartyRole::Admin,
+            permissions_override: Vec::new(),
+            connected_at_ms: 0,
+            last_seen_ms: 0,
+            connection_state: ConnectionState::Connected,
+        };
+        let mut server =
+            RoomServer::create("r1", "Room", RoomVisibility::LanVisible, admin, "inv", 0);
+        server
+            .add_queue_item(
+                "admin-1",
+                "item-1",
+                TrackRef::YouTube {
+                    video_id: "abc".to_string(),
+                    title: Some("Test Song".to_string()),
+                    channel_title: Some("Test Artist".to_string()),
+                },
+            )
+            .unwrap();
+        let snap = server.snapshot();
+
+        let text = party_queue_text(&snap);
+        assert!(text.contains("Queue (1 item(s)):"));
+        assert!(text.contains("Test Song"));
+        assert!(text.contains("Test Artist"));
+        assert!(text.contains("votes:+0"));
     }
 
     #[test]
