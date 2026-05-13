@@ -43,6 +43,15 @@ fn build_ui(app: &adw::Application) {
     let title = gtk::Label::new(Some("Meowify"));
     title.add_css_class("title-2");
     header_bar.set_title_widget(Some(&title));
+    let settings_btn = gtk::Button::from_icon_name("open-menu-symbolic");
+    settings_btn.set_tooltip_text(Some("Settings"));
+    header_bar.pack_end(&settings_btn);
+    let win = window.downgrade();
+    settings_btn.connect_clicked(move |_| {
+        if let Some(window) = win.upgrade() {
+            open_settings_dialog(window.upcast_ref());
+        }
+    });
 
     let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
     root.append(&header_bar);
@@ -171,6 +180,74 @@ fn open_file_import(playback: Rc<RefCell<PlaybackState>>, gst: Rc<RefCell<Option
         }
     });
     dialog.show();
+}
+
+fn open_settings_dialog(parent: &gtk::Window) {
+    let dialog = gtk::Dialog::with_buttons(
+        Some("Settings"),
+        Some(parent),
+        gtk::DialogFlags::MODAL,
+        &[("Close", gtk::ResponseType::Close)],
+    );
+    dialog.set_default_size(400, 300);
+
+    let content = dialog.content_area();
+    let box_ = gtk::Box::new(gtk::Orientation::Vertical, 12);
+    box_.set_margin_top(18);
+    box_.set_margin_bottom(18);
+    box_.set_margin_start(18);
+    box_.set_margin_end(18);
+
+    let heading = gtk::Label::new(Some("Settings"));
+    heading.add_css_class("title-2");
+    heading.set_xalign(0.0);
+    box_.append(&heading);
+
+    let offline_box = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    let offline_label = gtk::Label::new(Some("Offline mode"));
+    offline_label.set_xalign(0.0);
+    offline_label.set_hexpand(true);
+    let offline_check = gtk::CheckButton::new();
+    offline_box.append(&offline_label);
+    offline_box.append(&offline_check);
+    box_.append(&offline_box);
+
+    let theme_box = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    let theme_label = gtk::Label::new(Some("Theme"));
+    theme_label.set_xalign(0.0);
+    theme_label.set_hexpand(true);
+    let theme_combo = gtk::DropDown::from_strings(&["System", "Light", "Dark"]);
+    theme_box.append(&theme_label);
+    theme_box.append(&theme_combo);
+    box_.append(&theme_box);
+
+    let cache_box = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    let cache_label = gtk::Label::new(Some("Cache (MB)"));
+    cache_label.set_xalign(0.0);
+    cache_label.set_hexpand(true);
+    let cache_spin = gtk::SpinButton::with_range(1.0, 99999.0, 64.0);
+    cache_spin.set_value(512.0);
+    cache_box.append(&cache_label);
+    cache_box.append(&cache_spin);
+    box_.append(&cache_box);
+
+    let bt_box = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    let bt_label = gtk::Label::new(Some("Bluetooth (experimental)"));
+    bt_label.set_xalign(0.0);
+    bt_label.set_hexpand(true);
+    let bt_check = gtk::CheckButton::new();
+    bt_box.append(&bt_label);
+    bt_box.append(&bt_check);
+    box_.append(&bt_box);
+
+    let about = gtk::Label::new(Some("Meowify v0.1.0 — Rust • GTK4 • GStreamer • libp2p"));
+    about.set_xalign(0.0);
+    about.add_css_class("dim-label");
+    about.set_margin_top(12);
+    box_.append(&about);
+
+    content.append(&box_);
+    dialog.present();
 }
 
 fn playback_card() -> gtk::Frame {
