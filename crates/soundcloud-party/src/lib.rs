@@ -1,8 +1,10 @@
+pub mod discovery;
 pub mod model;
 pub mod protocol;
 pub mod rbac;
 pub mod room;
 
+pub use discovery::{DiscoveryEvent, LanDiscovery, RoomAnnouncement};
 pub use model::*;
 pub use protocol::*;
 pub use rbac::*;
