@@ -2,6 +2,8 @@ use meowify_core::can_persist_youtube_audio;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+pub mod gst;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RepeatMode {
     Off,

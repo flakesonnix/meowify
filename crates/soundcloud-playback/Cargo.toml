@@ -10,3 +10,9 @@ rust-version.workspace = true
 serde.workspace = true
 meowify-core = { path = "../soundcloud-core" }
 thiserror.workspace = true
+gstreamer = { workspace = true, features = ["v1_24"] }
+gstreamer-player = { workspace = true, features = ["v1_24"] }
+glib = { version = "0.22", features = ["v2_80"] }
+
+[dev-dependencies]
+tokio.workspace = true
