@@ -1,4 +1,4 @@
-use std::fmt::Write;
+use std::fmt::Write as _;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use meowify_party::{
@@ -67,7 +67,13 @@ enum PartyCommand {
         #[arg(long, value_enum)]
         role: Option<RoleArg>,
     },
-    Snapshot,
+    Snapshot {
+        #[arg(
+            long,
+            help = "Output machine-readable JSON instead of human-readable text"
+        )]
+        json: bool,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -151,7 +157,7 @@ fn render_party_command(command: &PartyCommand) -> String {
             Some(PartyPermission::SuggestTrack),
         ),
         PartyCommand::Permissions { role } => render_permissions(*role),
-        PartyCommand::Snapshot => render_snapshot(),
+        PartyCommand::Snapshot { json } => render_snapshot(*json),
     }
 }
 
@@ -195,7 +201,7 @@ fn render_permissions(role_filter: Option<RoleArg>) -> String {
     output
 }
 
-fn render_snapshot() -> String {
+fn render_snapshot(json: bool) -> String {
     let admin = PartyClient {
         client_id: "admin-1".to_string(),
         device_name: "laptop".to_string(),
@@ -270,7 +276,11 @@ fn render_snapshot() -> String {
         .unwrap();
 
     let snap = server.snapshot();
-    render_room_snapshot(&snap)
+    if json {
+        serde_json::to_string_pretty(&snap).expect("RoomSnapshot serializes")
+    } else {
+        render_room_snapshot(&snap)
+    }
 }
 
 fn render_room_snapshot(snap: &meowify_party::RoomSnapshot) -> String {
@@ -465,7 +475,7 @@ mod tests {
 
     #[test]
     fn snapshot_renders_room_members_queue_and_playback() {
-        let output = render_snapshot();
+        let output = render_snapshot(false);
 
         assert!(output.contains("room-demo"));
         assert!(output.contains("Demo Room"));
@@ -477,5 +487,19 @@ mod tests {
         assert!(output.contains("GANGNAM STYLE"));
         assert!(output.contains("playing:  true"));
         assert!(output.contains("dQw4w9WgXcQ"));
+    }
+
+    #[test]
+    fn snapshot_json_output_is_valid_json_with_expected_fields() {
+        let output = render_snapshot(true);
+
+        let value: serde_json::Value = serde_json::from_str(&output).expect("valid JSON");
+        assert_eq!(value["room"]["room_id"], "room-demo");
+        assert_eq!(value["room"]["room_name"], "Demo Room");
+        assert_eq!(value["current_admin"], "admin-1");
+        assert_eq!(value["protocol_version"], 1);
+        assert_eq!(value["members"].as_array().unwrap().len(), 2);
+        assert_eq!(value["queue"].as_array().unwrap().len(), 2);
+        assert!(value["playback_state"]["is_playing"].as_bool().unwrap());
     }
 }
