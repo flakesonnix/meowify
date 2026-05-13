@@ -12,4 +12,5 @@ gtk.workspace = true
 meowify-core = { path = "../soundcloud-core" }
 meowify-party = { path = "../soundcloud-party" }
 meowify-playback = { path = "../soundcloud-playback" }
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "sync"] }
 tracing.workspace = true

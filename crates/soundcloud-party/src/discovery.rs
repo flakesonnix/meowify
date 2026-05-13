@@ -301,12 +301,8 @@ impl LanDiscoveryHandle {
     /// Start LAN discovery in a background thread. Returns `None` if the
     /// transport layer cannot be initialised (e.g. no network interfaces).
     pub fn start() -> Option<Self> {
-        let announcement = RoomAnnouncement::new(
-            "",
-            "Meowify Client",
-            RoomVisibility::LanVisible,
-            "user",
-        );
+        let announcement =
+            RoomAnnouncement::new("", "Meowify Client", RoomVisibility::LanVisible, "user");
         let rooms: Arc<Mutex<Vec<RoomAnnouncement>>> = Arc::new(Mutex::new(Vec::new()));
         let rooms_clone = Arc::clone(&rooms);
         let (shutdown_tx, mut shutdown_rx) = mpsc::channel::<()>(1);
@@ -318,8 +314,7 @@ impl LanDiscoveryHandle {
                 .worker_threads(2)
                 .build()
                 .expect("tokio rt");
-            let disco =
-                rt.block_on(async { LanDiscovery::new(Some(announcement)).ok() });
+            let disco = rt.block_on(async { LanDiscovery::new(Some(announcement)).ok() });
             let Some(discovery) = disco else { return };
             rt.block_on(async move {
                 tokio::select! {

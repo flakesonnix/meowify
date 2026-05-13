@@ -4,8 +4,8 @@ use adw::prelude::*;
 use gtk::glib;
 use meowify_core::can_persist_youtube_audio;
 use meowify_party::{
-    ConnectionState, JoinRequest, PartyClient, PartyRole, PlaybackCommandKind, RoomServer,
-    RoomSnapshot, RoomVisibility, TrackRef,
+    ConnectionState, JoinRequest, LanDiscoveryHandle, PartyClient, PartyRole, PlaybackCommandKind,
+    RoomServer, RoomSnapshot, RoomVisibility, TrackRef,
 };
 use meowify_playback::{PlaybackError, PlaybackState, PlaybackStatus};
 
@@ -389,7 +389,7 @@ fn party_card() -> gtk::Frame {
             Err(e) => format!("approve failed: {e}"),
         }
     });
-    connect_party_button(&reject_btn, Rc::clone(&server), labels, |srv| {
+    connect_party_button(&reject_btn, Rc::clone(&server), labels.clone(), |srv| {
         let ids: Vec<String> = srv.join_requests().map(|r| r.request_id.clone()).collect();
         if ids.is_empty() {
             return "no pending requests to reject".to_string();
@@ -400,11 +400,72 @@ fn party_card() -> gtk::Frame {
         }
     });
 
+    let discovery = Rc::new(RefCell::new(None::<LanDiscoveryHandle>));
+    let discovery_label = gtk::Label::new(Some("LAN discovery off"));
+    discovery_label.set_xalign(0.0);
+    discovery_label.add_css_class("dim-label");
+
+    let discovery_controls = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    let start_btn = gtk::Button::with_label("Start Discovery");
+    let stop_btn = gtk::Button::with_label("Stop Discovery");
+    stop_btn.set_sensitive(false);
+    discovery_controls.append(&start_btn);
+    discovery_controls.append(&stop_btn);
+
+    let dl1 = discovery_label.clone();
+    let start1 = start_btn.clone();
+    let stop1 = stop_btn.clone();
+    let disc1 = Rc::clone(&discovery);
+    start_btn.connect_clicked(move |_| {
+        let handle = LanDiscoveryHandle::start();
+        if handle.is_some() {
+            *disc1.borrow_mut() = handle;
+            dl1.set_text("LAN discovery running...");
+            start1.set_sensitive(false);
+            stop1.set_sensitive(true);
+        } else {
+            dl1.set_text("LAN discovery failed to start");
+        }
+    });
+
+    let dl2 = discovery_label.clone();
+    let start2 = start_btn.clone();
+    let stop2 = stop_btn.clone();
+    let disc2 = Rc::clone(&discovery);
+    stop_btn.connect_clicked(move |_| {
+        *disc2.borrow_mut() = None;
+        dl2.set_text("LAN discovery stopped");
+        start2.set_sensitive(true);
+        stop2.set_sensitive(false);
+    });
+
+    let disc3 = Rc::clone(&discovery);
+    let dl3 = discovery_label.clone();
+    glib::timeout_add_local(std::time::Duration::from_secs(2), move || {
+        let guard = disc3.borrow();
+        if let Some(handle) = guard.as_ref() {
+            let rooms = handle.discovered_rooms();
+            if rooms.is_empty() {
+                dl3.set_text("LAN discovery running — no rooms found yet");
+            } else {
+                let names: Vec<&str> = rooms.iter().map(|r| r.room_name.as_str()).collect();
+                dl3.set_text(&format!(
+                    "Discovered ({}): {}",
+                    rooms.len(),
+                    names.join(", ")
+                ));
+            }
+        }
+        glib::ControlFlow::Continue
+    });
+
     card.append(&title_label);
     card.append(&state_label);
     card.append(&members_label);
     card.append(&pending_label);
     card.append(&join_controls);
+    card.append(&discovery_label);
+    card.append(&discovery_controls);
     card.append(&queue_label);
     card.append(&playback_label);
     card.append(&event_label);

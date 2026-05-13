@@ -2663,6 +2663,7 @@ dependencies = [
  "meowify-core",
  "meowify-party",
  "meowify-playback",
+ "tokio",
  "tracing",
 ]
 
