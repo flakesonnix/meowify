@@ -62,6 +62,13 @@ pub enum DiscoveryEvent {
         peer_id: PeerId,
         room_id: RoomId,
     },
+    /// A peer sent an announcement with a protocol version that differs from ours.
+    /// The room is not stored; the peer should be treated as incompatible.
+    ProtocolVersionMismatch {
+        peer_id: PeerId,
+        their_version: u32,
+        our_version: u32,
+    },
 }
 
 // ── NetworkBehaviour ──────────────────────────────────────────────────────────
@@ -216,7 +223,6 @@ impl LanDiscovery {
                     },
                 ..
             })) => {
-                self.known_rooms.insert(peer, request.clone());
                 let response = self.local_announcement.clone();
                 let _ = self
                     .swarm
@@ -224,13 +230,25 @@ impl LanDiscovery {
                     .announce
                     .send_response(channel, response);
 
-                event_tx
-                    .send(DiscoveryEvent::RoomAnnounced {
-                        peer_id: peer,
-                        announcement: request,
-                    })
-                    .await
-                    .map_err(|_| ())?;
+                if request.protocol_version != PROTOCOL_VERSION {
+                    event_tx
+                        .send(DiscoveryEvent::ProtocolVersionMismatch {
+                            peer_id: peer,
+                            their_version: request.protocol_version,
+                            our_version: PROTOCOL_VERSION,
+                        })
+                        .await
+                        .map_err(|_| ())?;
+                } else {
+                    self.known_rooms.insert(peer, request.clone());
+                    event_tx
+                        .send(DiscoveryEvent::RoomAnnounced {
+                            peer_id: peer,
+                            announcement: request,
+                        })
+                        .await
+                        .map_err(|_| ())?;
+                }
             }
 
             // Outbound: remote peer replied with their announcement.
@@ -243,14 +261,25 @@ impl LanDiscovery {
                     },
                 ..
             })) => {
-                self.known_rooms.insert(peer, announcement.clone());
-                event_tx
-                    .send(DiscoveryEvent::RoomAnnounced {
-                        peer_id: peer,
-                        announcement,
-                    })
-                    .await
-                    .map_err(|_| ())?;
+                if announcement.protocol_version != PROTOCOL_VERSION {
+                    event_tx
+                        .send(DiscoveryEvent::ProtocolVersionMismatch {
+                            peer_id: peer,
+                            their_version: announcement.protocol_version,
+                            our_version: PROTOCOL_VERSION,
+                        })
+                        .await
+                        .map_err(|_| ())?;
+                } else {
+                    self.known_rooms.insert(peer, announcement.clone());
+                    event_tx
+                        .send(DiscoveryEvent::RoomAnnounced {
+                            peer_id: peer,
+                            announcement,
+                        })
+                        .await
+                        .map_err(|_| ())?;
+                }
             }
 
             _ => {}
@@ -287,6 +316,18 @@ mod tests {
         let json = serde_json::to_string(&ann).unwrap();
         let decoded: RoomAnnouncement = serde_json::from_str(&json).unwrap();
         assert_eq!(ann, decoded);
+    }
+
+    #[test]
+    fn announcement_with_mismatched_version_is_distinguishable() {
+        let ann = RoomAnnouncement {
+            room_id: "r1".to_string(),
+            room_name: "Room".to_string(),
+            visibility: RoomVisibility::LanVisible,
+            admin_name: "Host".to_string(),
+            protocol_version: PROTOCOL_VERSION + 1,
+        };
+        assert_ne!(ann.protocol_version, PROTOCOL_VERSION);
     }
 
     #[tokio::test]
