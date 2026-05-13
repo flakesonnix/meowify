@@ -120,6 +120,51 @@ fn main_panel() -> gtk::Box {
     panel
 }
 
+fn open_file_import(playback: Rc<RefCell<PlaybackState>>, gst: Rc<RefCell<Option<GstBackend>>>) {
+    let dialog = gtk::FileChooserNative::builder()
+        .title("Import audio file")
+        .action(gtk::FileChooserAction::Open)
+        .modal(true)
+        .build();
+
+    let pb = Rc::clone(&playback);
+    let g = Rc::clone(&gst);
+    dialog.connect_response(move |_dialog, response| {
+        if response != gtk::ResponseType::Accept {
+            return;
+        }
+        let file = match _dialog.file() {
+            Some(f) => f,
+            None => return,
+        };
+        let path = match file.path() {
+            Some(p) => p,
+            None => return,
+        };
+        let title = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("unknown")
+            .to_string();
+        let path_str = path.to_string_lossy().to_string();
+
+        let mut p = pb.borrow_mut();
+        let local_id = format!("local-import-{}", p.queue.len() + 1);
+        p.queue.push(meowify_playback::QueueItem {
+            id: local_id,
+            source: meowify_playback::PlaybackSource::ImportedLocalFile {
+                path: path_str.clone(),
+            },
+            title: title.clone(),
+        });
+        if let Some(ref gst_b) = *g.borrow() {
+            let uri = format!("file://{path_str}");
+            let _ = gst_b.set_uri(&uri);
+        }
+    });
+    dialog.show();
+}
+
 fn playback_card() -> gtk::Frame {
     let playback = Rc::new(RefCell::new(PlaybackState::default()));
     let gst = Rc::new(RefCell::new(GstBackend::new().ok()));
@@ -236,12 +281,23 @@ fn playback_card() -> gtk::Frame {
     vol_box.append(&vol_label);
     vol_box.append(&vol_scale);
 
+    let import_controls = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    let import_btn = gtk::Button::with_label("Import File");
+    import_controls.append(&import_btn);
+
+    let pb_import = Rc::clone(&playback);
+    let gst_import = Rc::clone(&gst);
+    import_btn.connect_clicked(move |_| {
+        open_file_import(Rc::clone(&pb_import), Rc::clone(&gst_import));
+    });
+
     card.append(&title);
     card.append(&status);
     card.append(&queue);
     card.append(&current);
     card.append(&event);
     card.append(&controls);
+    card.append(&import_controls);
     card.append(&vol_box);
 
     let frame = gtk::Frame::new(None);
