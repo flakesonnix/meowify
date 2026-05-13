@@ -7,3 +7,5 @@
 *.sqlite
 *.sqlite3
 *.log
+/AGENTS.md
+/WATCHLIST.md
