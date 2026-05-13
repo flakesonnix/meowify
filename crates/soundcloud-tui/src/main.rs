@@ -302,12 +302,22 @@ fn detail_panel(app: &AppState) -> Paragraph<'static> {
         let snap = app.room.snapshot();
         lines.push(Line::from(""));
         lines.push(Line::from(party_room_line(&snap)));
-        lines.push(Line::from(party_members_line(&snap)));
-        lines.push(Line::from(party_queue_line(&snap)));
         lines.push(Line::from(party_playback_line(&snap)));
-        lines.push(Line::from(
-            "Party keys: l lock room, u unlock room, e end room",
-        ));
+        lines.push(Line::from(""));
+        lines.push(Line::from(format!("Members ({}):", snap.members.len())));
+        for row in party_member_rows(&snap) {
+            lines.push(Line::from(row));
+        }
+        lines.push(Line::from(""));
+        lines.push(Line::from(format!("Queue ({} item(s)):", snap.queue.len())));
+        if snap.queue.is_empty() {
+            lines.push(Line::from("  (empty)"));
+        }
+        for row in party_queue_rows(&snap) {
+            lines.push(Line::from(row));
+        }
+        lines.push(Line::from(""));
+        lines.push(Line::from("Party keys: l lock, u unlock, e end room"));
     }
 
     Paragraph::new(lines)
@@ -345,12 +355,37 @@ fn party_room_line(snap: &meowify_party::RoomSnapshot) -> String {
     )
 }
 
-fn party_members_line(snap: &meowify_party::RoomSnapshot) -> String {
-    format!("Members: {}", snap.members.len())
+fn party_member_rows(snap: &meowify_party::RoomSnapshot) -> Vec<String> {
+    let mut members = snap.members.clone();
+    members.sort_by(|a, b| a.client_id.cmp(&b.client_id));
+    members
+        .iter()
+        .map(|m| format!("  {:?} | {} | {}", m.role, m.client_id, m.user_name))
+        .collect()
 }
 
-fn party_queue_line(snap: &meowify_party::RoomSnapshot) -> String {
-    format!("Queue: {} item(s)", snap.queue.len())
+fn party_queue_rows(snap: &meowify_party::RoomSnapshot) -> Vec<String> {
+    snap.queue
+        .iter()
+        .map(|item| {
+            let title = match &item.track_ref {
+                TrackRef::YouTube {
+                    title,
+                    channel_title,
+                    ..
+                } => format!(
+                    "{} — {}",
+                    title.as_deref().unwrap_or("(no title)"),
+                    channel_title.as_deref().unwrap_or("(no channel)")
+                ),
+                TrackRef::ImportedLocalFile { title, .. } => format!("[local] {title}"),
+            };
+            format!(
+                "  {} | votes:{:+} | {}",
+                item.queue_item_id, item.votes, title
+            )
+        })
+        .collect()
 }
 
 fn party_playback_line(snap: &meowify_party::RoomSnapshot) -> String {
@@ -419,11 +454,16 @@ mod tests {
         assert!(room_line.contains("LAN Party Demo"));
         assert!(room_line.contains("Protocol v"));
 
-        let members_line = party_members_line(&snap);
-        assert!(members_line.contains('2'));
+        let member_rows = party_member_rows(&snap);
+        assert_eq!(member_rows.len(), 2);
+        assert!(member_rows.iter().any(|r| r.contains("Alice")));
+        assert!(member_rows.iter().any(|r| r.contains("Bob")));
 
-        let queue_line = party_queue_line(&snap);
-        assert!(queue_line.contains('1'));
+        let queue_rows = party_queue_rows(&snap);
+        assert_eq!(queue_rows.len(), 1);
+        assert!(queue_rows[0].contains("Never Gonna Give You Up"));
+        assert!(queue_rows[0].contains("Rick Astley"));
+        assert!(queue_rows[0].contains("votes:+0"));
     }
 
     #[test]
