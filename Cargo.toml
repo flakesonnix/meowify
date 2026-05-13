@@ -1,0 +1,40 @@
+[workspace]
+members = [
+    "crates/soundcloud-core",
+    "crates/soundcloud-playback",
+    "crates/soundcloud-party",
+    "crates/soundcloud-gtk",
+    "crates/soundcloud-tui",
+    "crates/soundcloud-cli",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+repository = "https://example.invalid/meowify"
+rust-version = "1.85"
+
+[workspace.dependencies]
+anyhow = "1"
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "gzip", "brotli", "zstd", "deflate"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+clap = { version = "4", features = ["derive"] }
+directories = "6"
+rusqlite = { version = "0.39", features = ["bundled"] }
+gtk = { package = "gtk4", version = "0.11" }
+adw = { package = "libadwaita", version = "0.9" }
+ratatui = "0.30"
+crossterm = "0.29"
+gstreamer = "0.25"
+gstreamer-player = "0.25"
+keyring = "4"
+libp2p = { version = "0.56", default-features = false, features = ["tokio", "tcp", "quic", "noise", "yamux", "mdns", "request-response", "macros"] }
+bluer = { version = "0.17", default-features = false, features = ["bluetoothd", "serde"] }
+sha2 = "0.10"
