@@ -131,6 +131,7 @@ struct AppState {
     input_buf: String,
     imported_count: usize,
     gst: Option<GstBackend>,
+    volume: f64,
 }
 
 impl Default for AppState {
@@ -147,6 +148,7 @@ impl Default for AppState {
             input_buf: String::new(),
             imported_count: 0,
             gst,
+            volume: 0.8,
         }
     }
 }
@@ -203,6 +205,8 @@ impl AppState {
                 KeyCode::Char('e') => self.end_room(),
                 KeyCode::Char('a') => self.approve_next_pending(),
                 KeyCode::Char('r') => self.reject_next_pending(),
+                KeyCode::Char('+') | KeyCode::Char('=') => self.volume_up(),
+                KeyCode::Char('-') | KeyCode::Char('_') => self.volume_down(),
                 KeyCode::Char('i') => {
                     self.input_mode = InputMode::ImportPath;
                     self.input_buf.clear();
@@ -212,6 +216,22 @@ impl AppState {
                 _ => {}
             },
         }
+    }
+
+    fn volume_up(&mut self) {
+        self.volume = (self.volume + 0.1).min(1.0);
+        if let Some(ref gst) = self.gst {
+            gst.set_volume(self.volume);
+        }
+        self.last_event = format!("volume: {:.0}%", self.volume * 100.0);
+    }
+
+    fn volume_down(&mut self) {
+        self.volume = (self.volume - 0.1).max(0.0);
+        if let Some(ref gst) = self.gst {
+            gst.set_volume(self.volume);
+        }
+        self.last_event = format!("volume: {:.0}%", self.volume * 100.0);
     }
 
     fn do_import(&mut self) {
@@ -529,7 +549,9 @@ fn detail_panel(app: &AppState) -> Paragraph<'static> {
     let offline_policy = "Offline mode: local files and metadata — no account required";
 
     let keys = match app.input_mode {
-        InputMode::Normal => "Keys: i import, j/k nav, space play/pause, s stop, n/p skip, q quit",
+        InputMode::Normal => {
+            "Keys: i import, +/- vol, space play/pause, s stop, n/p skip, j/k nav, q quit"
+        }
         InputMode::ImportPath => "Type path, Enter confirm, Esc cancel",
     };
 
@@ -568,6 +590,22 @@ fn detail_panel(app: &AppState) -> Paragraph<'static> {
     lines.push(Line::from(playback_status_line(&app.playback)));
     lines.push(Line::from(playback_queue_line(&app.playback)));
     lines.push(Line::from(playback_current_line(&app.playback)));
+    lines.push(Line::from(format!("Volume: {:.0}%", app.volume * 100.0)));
+
+    if app.playback.status == PlaybackStatus::Playing && app.gst.is_some() {
+        if let Some(ref gst) = app.gst {
+            if let Some(dur) = gst.duration() {
+                let total = dur.as_millis() as u64;
+                if total > 0 {
+                    lines.push(Line::from(format!(
+                        "Progress: {}/{}",
+                        ms_fmt(app.playback.position_ms),
+                        ms_fmt(total)
+                    )));
+                }
+            }
+        }
+    }
     lines.push(Line::from(format!("Last event: {}", app.last_event)));
     lines.push(Line::from(""));
     lines.push(Line::from(offline_policy));
@@ -609,6 +647,13 @@ fn playback_status_line(playback: &PlaybackState) -> String {
         playback_status_name(playback.status),
         playback.position_ms
     )
+}
+
+fn ms_fmt(ms: u64) -> String {
+    let secs = ms / 1000;
+    let m = secs / 60;
+    let s = secs % 60;
+    format!("{m}:{s:02}")
 }
 
 fn playback_queue_line(playback: &PlaybackState) -> String {
@@ -671,7 +716,7 @@ fn party_header(app: &AppState, snap: &meowify_party::RoomSnapshot) -> Paragraph
         Line::from(offline_policy),
         Line::from(""),
         Line::from(
-            "Keys: d discover, i import, l lock, u unlock, e end, a approve, r reject, j/k nav, space play/pause, s stop, n/p skip, q quit",
+            "Keys: d discover, i import, +/- vol, l lock, u unlock, e end, a approve, r reject, j/k nav, space play/pause, s stop, n/p skip, q quit",
         ),
     ];
 
@@ -1104,6 +1149,53 @@ mod tests {
 
         assert_eq!(app.input_mode, InputMode::Normal);
         assert!(app.last_event.contains("file not found"));
+    }
+
+    #[test]
+    fn volume_up_increases_volume() {
+        let mut app = AppState::default();
+        let initial = app.volume;
+        app.volume_up();
+        assert!((app.volume - initial - 0.1).abs() < 0.001);
+        assert!(app.last_event.contains("volume:"));
+    }
+
+    #[test]
+    fn volume_down_decreases_volume() {
+        let mut app = AppState {
+            volume: 0.5,
+            ..AppState::default()
+        };
+        app.volume_down();
+        assert!((app.volume - 0.4).abs() < 0.001);
+    }
+
+    #[test]
+    fn volume_clamps_at_zero() {
+        let mut app = AppState {
+            volume: 0.0,
+            ..AppState::default()
+        };
+        app.volume_down();
+        assert!((app.volume - 0.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn volume_clamps_at_one() {
+        let mut app = AppState {
+            volume: 1.0,
+            ..AppState::default()
+        };
+        app.volume_up();
+        assert!((app.volume - 1.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn ms_fmt_formats_correctly() {
+        assert_eq!(ms_fmt(0), "0:00");
+        assert_eq!(ms_fmt(5_000), "0:05");
+        assert_eq!(ms_fmt(65_000), "1:05");
+        assert_eq!(ms_fmt(3_600_000), "60:00");
     }
 
     #[test]

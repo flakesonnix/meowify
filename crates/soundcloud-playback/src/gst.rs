@@ -100,6 +100,12 @@ impl GstBackend {
         self.playing.load(atomic::Ordering::SeqCst)
     }
 
+    /// Set volume (0.0 = silent, 1.0 = normal).
+    pub fn set_volume(&self, vol: f64) {
+        self.playbin
+            .set_property_from_str("volume", &vol.to_string());
+    }
+
     fn set_state(&self, state: State) -> Result<(), GstError> {
         self.playbin
             .set_state(state)

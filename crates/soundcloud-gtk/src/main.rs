@@ -222,12 +222,27 @@ fn playback_card() -> gtk::Frame {
         glib::ControlFlow::Continue
     });
 
+    let vol_box = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    let vol_label = gtk::Label::new(Some("Volume:"));
+    let vol_scale = gtk::Scale::with_range(gtk::Orientation::Horizontal, 0.0, 1.0, 0.05);
+    vol_scale.set_value(0.8);
+    vol_scale.set_draw_value(true);
+    let gst_vol = Rc::clone(&gst);
+    vol_scale.connect_value_changed(move |scale| {
+        if let Some(g) = &*gst_vol.borrow() {
+            g.set_volume(scale.value());
+        }
+    });
+    vol_box.append(&vol_label);
+    vol_box.append(&vol_scale);
+
     card.append(&title);
     card.append(&status);
     card.append(&queue);
     card.append(&current);
     card.append(&event);
     card.append(&controls);
+    card.append(&vol_box);
 
     let frame = gtk::Frame::new(None);
     frame.set_child(Some(&card));
@@ -293,9 +308,7 @@ fn toggle_playback2(playback: &mut PlaybackState, gst: &Option<GstBackend>) -> S
                 play_current_gst2(playback, gst);
                 "Playback started.".to_string()
             }
-            Err(PlaybackError::QueueEmpty) => {
-                "Queue empty — import a file first.".to_string()
-            }
+            Err(PlaybackError::QueueEmpty) => "Queue empty — import a file first.".to_string(),
         },
     }
 }
