@@ -113,6 +113,12 @@ impl View {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InputMode {
+    Normal,
+    ImportPath,
+}
+
 struct AppState {
     selected: usize,
     should_quit: bool,
@@ -120,6 +126,9 @@ struct AppState {
     room: RoomServer,
     last_event: String,
     discovery: Option<LanDiscoveryHandle>,
+    input_mode: InputMode,
+    input_buf: String,
+    imported_count: usize,
 }
 
 impl Default for AppState {
@@ -129,8 +138,11 @@ impl Default for AppState {
             should_quit: false,
             playback: PlaybackState::default(),
             room: make_demo_room(),
-            last_event: "ready; queue empty until search/import wiring lands".to_string(),
+            last_event: "ready — press i to import a local audio file".to_string(),
             discovery: None,
+            input_mode: InputMode::Normal,
+            input_buf: String::new(),
+            imported_count: 0,
         }
     }
 }
@@ -153,22 +165,72 @@ impl AppState {
     }
 
     fn handle_key(&mut self, code: KeyCode) {
-        match code {
-            KeyCode::Char('q') | KeyCode::Esc => self.should_quit = true,
-            KeyCode::Down | KeyCode::Char('j') => self.next(),
-            KeyCode::Up | KeyCode::Char('k') => self.previous(),
-            KeyCode::Char(' ') => self.toggle_playback(),
-            KeyCode::Char('s') => self.stop_playback(),
-            KeyCode::Char('n') => self.skip_next(),
-            KeyCode::Char('p') => self.skip_previous(),
-            KeyCode::Char('d') => self.toggle_discovery(),
-            KeyCode::Char('l') => self.lock_room(),
-            KeyCode::Char('u') => self.unlock_room(),
-            KeyCode::Char('e') => self.end_room(),
-            KeyCode::Char('a') => self.approve_next_pending(),
-            KeyCode::Char('r') => self.reject_next_pending(),
-            _ => {}
+        match self.input_mode {
+            InputMode::ImportPath => match code {
+                KeyCode::Esc => {
+                    self.input_mode = InputMode::Normal;
+                    self.input_buf.clear();
+                    self.last_event = "import cancelled".to_string();
+                }
+                KeyCode::Enter => {
+                    self.do_import();
+                    self.input_mode = InputMode::Normal;
+                    self.input_buf.clear();
+                }
+                KeyCode::Char(c) => {
+                    self.input_buf.push(c);
+                }
+                KeyCode::Backspace => {
+                    self.input_buf.pop();
+                }
+                _ => {}
+            },
+            InputMode::Normal => match code {
+                KeyCode::Char('q') | KeyCode::Esc => self.should_quit = true,
+                KeyCode::Down | KeyCode::Char('j') => self.next(),
+                KeyCode::Up | KeyCode::Char('k') => self.previous(),
+                KeyCode::Char(' ') => self.toggle_playback(),
+                KeyCode::Char('s') => self.stop_playback(),
+                KeyCode::Char('n') => self.skip_next(),
+                KeyCode::Char('p') => self.skip_previous(),
+                KeyCode::Char('d') => self.toggle_discovery(),
+                KeyCode::Char('l') => self.lock_room(),
+                KeyCode::Char('u') => self.unlock_room(),
+                KeyCode::Char('e') => self.end_room(),
+                KeyCode::Char('a') => self.approve_next_pending(),
+                KeyCode::Char('r') => self.reject_next_pending(),
+                KeyCode::Char('i') => {
+                    self.input_mode = InputMode::ImportPath;
+                    self.input_buf.clear();
+                    self.last_event =
+                        "enter file path, press Enter to import, Esc to cancel".to_string();
+                }
+                _ => {}
+            },
         }
+    }
+
+    fn do_import(&mut self) {
+        let path = std::path::Path::new(&self.input_buf);
+        if !path.exists() {
+            self.last_event = format!("file not found: {}", self.input_buf);
+            return;
+        }
+        let title = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("unknown")
+            .to_string();
+        let local_id = format!("local-import-{}", self.imported_count + 1);
+        self.playback.queue.push(meowify_playback::QueueItem {
+            id: local_id.clone(),
+            source: meowify_playback::PlaybackSource::ImportedLocalFile {
+                path: self.input_buf.clone(),
+            },
+            title: title.clone(),
+        });
+        self.imported_count += 1;
+        self.last_event = format!("imported: {title}");
     }
 
     fn lock_room(&mut self) {
@@ -413,6 +475,11 @@ fn detail_panel(app: &AppState) -> Paragraph<'static> {
     let selected = app.selected_view();
     let offline_policy = "Offline mode: local files and metadata — no account required";
 
+    let keys = match app.input_mode {
+        InputMode::Normal => "Keys: i import, j/k nav, space play/pause, s stop, n/p skip, q quit",
+        InputMode::ImportPath => "Type path, Enter confirm, Esc cancel",
+    };
+
     let mut lines = vec![
         Line::from(Span::styled(
             selected.title(),
@@ -423,17 +490,34 @@ fn detail_panel(app: &AppState) -> Paragraph<'static> {
         Line::from(""),
         Line::from(selected.detail()),
         Line::from(""),
-        Line::from(
-            "Keys: j/down next view, k/up previous view, space play/pause, s stop, n/p skip, q/esc quit",
-        ),
-        Line::from(""),
-        Line::from(playback_status_line(&app.playback)),
-        Line::from(playback_queue_line(&app.playback)),
-        Line::from(playback_current_line(&app.playback)),
-        Line::from(format!("Last event: {}", app.last_event)),
-        Line::from(""),
-        Line::from(offline_policy),
+        Line::from(keys),
     ];
+
+    if app.input_mode == InputMode::ImportPath {
+        let prompt = format!("Import path: {}", app.input_buf);
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            prompt,
+            Style::default().fg(Color::Cyan),
+        )));
+        lines.push(Line::from(""));
+
+        return Paragraph::new(lines)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(" Current view "),
+            )
+            .wrap(Wrap { trim: true });
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(playback_status_line(&app.playback)));
+    lines.push(Line::from(playback_queue_line(&app.playback)));
+    lines.push(Line::from(playback_current_line(&app.playback)));
+    lines.push(Line::from(format!("Last event: {}", app.last_event)));
+    lines.push(Line::from(""));
+    lines.push(Line::from(offline_policy));
 
     if selected == View::Party {
         let snap = app.room.snapshot();
@@ -534,7 +618,7 @@ fn party_header(app: &AppState, snap: &meowify_party::RoomSnapshot) -> Paragraph
         Line::from(offline_policy),
         Line::from(""),
         Line::from(
-            "Keys: d discover, l lock, u unlock, e end, a approve, r reject, j/k nav, space play/pause, s stop, n/p skip, q quit",
+            "Keys: d discover, i import, l lock, u unlock, e end, a approve, r reject, j/k nav, space play/pause, s stop, n/p skip, q quit",
         ),
     ];
 
@@ -930,6 +1014,40 @@ mod tests {
         let content = format!("{list:?}");
 
         assert!(content.contains("LAN discovery off"));
+    }
+
+    #[test]
+    fn import_key_enters_import_mode() {
+        let mut app = AppState::default();
+        assert_eq!(app.input_mode, InputMode::Normal);
+
+        app.handle_key(KeyCode::Char('i'));
+
+        assert_eq!(app.input_mode, InputMode::ImportPath);
+        assert!(app.last_event.contains("enter file path"));
+    }
+
+    #[test]
+    fn import_mode_esc_returns_to_normal() {
+        let mut app = AppState::default();
+        app.handle_key(KeyCode::Char('i'));
+        app.handle_key(KeyCode::Esc);
+
+        assert_eq!(app.input_mode, InputMode::Normal);
+        assert_eq!(app.last_event, "import cancelled");
+    }
+
+    #[test]
+    fn import_non_existent_file_reports_error() {
+        let mut app = AppState {
+            input_mode: InputMode::ImportPath,
+            input_buf: "/nonexistent/path.flac".to_string(),
+            ..AppState::default()
+        };
+        app.handle_key(KeyCode::Enter);
+
+        assert_eq!(app.input_mode, InputMode::Normal);
+        assert!(app.last_event.contains("file not found"));
     }
 
     #[test]
