@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 pub const YOUTUBE_API_BASE_URL: &str = "https://www.googleapis.com/youtube/v3";
+pub const SOUNDCLOUD_API_BASE_URL: &str = "https://api.soundcloud.com";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -177,6 +178,93 @@ impl YouTubeApiClient {
                 ("maxResults", "50"),
             ])
             .build()
+    }
+
+    fn get(&self, path: &str) -> reqwest::RequestBuilder {
+        self.http
+            .get(format!("{}{}", self.base_url, path))
+            .header("Authorization", self.authorization_header_value())
+            .header("Accept", "application/json; charset=utf-8")
+    }
+}
+
+pub fn can_persist_soundcloud_audio() -> bool {
+    false
+}
+
+// ── SoundCloud types ────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SoundCloudTrack {
+    pub id: u64,
+    pub title: String,
+    pub user_id: Option<u64>,
+    pub username: Option<String>,
+    pub duration: Option<u64>,
+    pub artwork_url: Option<String>,
+    pub access: Option<String>,
+    pub streamable: Option<bool>,
+    pub downloadable: Option<bool>,
+    pub download_url: Option<String>,
+    pub stream_url: Option<String>,
+    pub permalink_url: Option<String>,
+}
+
+impl SoundCloudTrack {
+    pub fn is_playable(&self) -> bool {
+        matches!(self.access.as_deref(), Some("playable") | None)
+    }
+
+    pub fn offline_status(&self) -> OfflineStatus {
+        OfflineStatus::StreamOnly
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SoundCloudUser {
+    pub id: u64,
+    pub username: String,
+    pub description: Option<String>,
+    pub city: Option<String>,
+    pub permalink_url: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SoundCloudApiClient {
+    http: reqwest::Client,
+    base_url: String,
+    access_token: String,
+}
+
+impl SoundCloudApiClient {
+    pub fn new(access_token: impl Into<String>) -> Self {
+        Self::with_base_url(SOUNDCLOUD_API_BASE_URL, access_token)
+    }
+
+    pub fn with_base_url(base_url: impl Into<String>, access_token: impl Into<String>) -> Self {
+        Self {
+            http: reqwest::Client::new(),
+            base_url: base_url.into(),
+            access_token: access_token.into(),
+        }
+    }
+
+    pub fn authorization_header_value(&self) -> String {
+        format!("OAuth {}", self.access_token)
+    }
+
+    pub fn search_tracks_request(&self, query: &str) -> Result<reqwest::Request, reqwest::Error> {
+        self.get("/tracks")
+            .query(&[("q", query), ("linked_partitioning", "1"), ("limit", "50")])
+            .build()
+    }
+
+    pub fn track_request(&self, track_id: u64) -> Result<reqwest::Request, reqwest::Error> {
+        self.get(&format!("/tracks/{track_id}")).build()
+    }
+
+    pub fn stream_request(&self, track_id: u64) -> Result<reqwest::Request, reqwest::Error> {
+        self.get(&format!("/tracks/{track_id}/streams")).build()
     }
 
     fn get(&self, path: &str) -> reqwest::RequestBuilder {

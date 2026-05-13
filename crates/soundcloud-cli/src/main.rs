@@ -396,6 +396,13 @@ fn render_room_snapshot(snap: &meowify_party::RoomSnapshot) -> String {
                 title.as_deref().unwrap_or("(no title)"),
                 channel_title.as_deref().unwrap_or("(no channel)")
             ),
+            TrackRef::SoundCloud {
+                title, user_title, ..
+            } => format!(
+                "{} — {}",
+                title.as_deref().unwrap_or("(no title)"),
+                user_title.as_deref().unwrap_or("(no user)")
+            ),
             TrackRef::ImportedLocalFile { title, .. } => format!("[local] {title}"),
         };
         let _ = writeln!(
@@ -420,6 +427,16 @@ fn render_room_snapshot(snap: &meowify_party::RoomSnapshot) -> String {
                 "  track:    {} ({})",
                 title.as_deref().unwrap_or("(no title)"),
                 video_id
+            );
+        }
+        Some(TrackRef::SoundCloud {
+            title, track_id, ..
+        }) => {
+            let _ = writeln!(
+                out,
+                "  track:    {} ({})",
+                title.as_deref().unwrap_or("(no title)"),
+                track_id
             );
         }
         Some(TrackRef::ImportedLocalFile { title, local_id }) => {

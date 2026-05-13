@@ -49,6 +49,11 @@ pub enum TrackRef {
         title: Option<String>,
         channel_title: Option<String>,
     },
+    SoundCloud {
+        track_id: String,
+        title: Option<String>,
+        user_title: Option<String>,
+    },
     ImportedLocalFile {
         local_id: String,
         title: String,

@@ -4,11 +4,13 @@ pub mod config;
 pub mod db;
 
 pub use api::{
-    ApiError, OfflineStatus, PagedResponse, VideoPrivacyStatus, YouTubeApiClient, YouTubeChannel,
-    YouTubePlaylist, YouTubeVideo, can_persist_youtube_audio,
+    ApiError, OfflineStatus, PagedResponse, SoundCloudApiClient, SoundCloudTrack, SoundCloudUser,
+    VideoPrivacyStatus, YouTubeApiClient, YouTubeChannel, YouTubePlaylist, YouTubeVideo,
+    can_persist_soundcloud_audio, can_persist_youtube_audio,
 };
 pub use auth::{
-    AuthError, GoogleAuthClient, OAuthCredentials, OAuthEndpoints, Pkce, TokenResponse,
+    AuthError, GoogleAuthClient, OAuthCredentials, OAuthEndpoints, Pkce, SoundCloudAuthClient,
+    TokenResponse,
 };
 pub use config::{AppSettings, ConfigError, Theme};
 pub use db::{

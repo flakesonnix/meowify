@@ -166,6 +166,71 @@ impl GoogleAuthClient {
     }
 }
 
+// ── SoundCloud auth ─────────────────────────────────────────────────────────
+
+pub const SOUNDCLOUD_AUTHORIZE_URL: &str = "https://secure.soundcloud.com";
+pub const SOUNDCLOUD_TOKEN_URL: &str = "https://api.soundcloud.com/oauth2/token";
+
+#[derive(Debug, Clone)]
+pub struct SoundCloudAuthClient {
+    http: reqwest::Client,
+    client_id: String,
+    client_secret: String,
+    redirect_uri: String,
+}
+
+impl SoundCloudAuthClient {
+    pub fn new(client_id: String, client_secret: String, redirect_uri: String) -> Self {
+        Self {
+            http: reqwest::Client::new(),
+            client_id,
+            client_secret,
+            redirect_uri,
+        }
+    }
+
+    pub fn authorization_url(&self, state: &str, pkce: &Pkce) -> Result<reqwest::Url, AuthError> {
+        self.http
+            .get(SOUNDCLOUD_AUTHORIZE_URL)
+            .query(&[
+                ("client_id", self.client_id.as_str()),
+                ("redirect_uri", self.redirect_uri.as_str()),
+                ("response_type", "code"),
+                ("code_challenge", pkce.challenge.as_str()),
+                ("code_challenge_method", "S256"),
+                ("state", state),
+            ])
+            .build()
+            .map(|req| req.url().clone())
+            .map_err(AuthError::InvalidAuthorizationUrl)
+    }
+
+    pub async fn exchange_authorization_code(
+        &self,
+        code: &str,
+        pkce: &Pkce,
+    ) -> Result<TokenResponse, AuthError> {
+        let response = self
+            .http
+            .post(SOUNDCLOUD_TOKEN_URL)
+            .header("Accept", "application/json; charset=utf-8")
+            .form(&[
+                ("grant_type", "authorization_code"),
+                ("client_id", self.client_id.as_str()),
+                ("client_secret", self.client_secret.as_str()),
+                ("redirect_uri", self.redirect_uri.as_str()),
+                ("code_verifier", pkce.verifier.as_str()),
+                ("code", code),
+            ])
+            .send()
+            .await
+            .map_err(AuthError::TokenRequest)?
+            .error_for_status()
+            .map_err(AuthError::TokenRequest)?;
+        response.json().await.map_err(AuthError::TokenRequest)
+    }
+}
+
 pub fn pkce_challenge(verifier: &str) -> String {
     URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()))
 }

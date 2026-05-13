@@ -21,6 +21,7 @@ pub enum PlaybackStatus {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PlaybackSource {
     YouTubeVideo { video_id: String },
+    SoundCloudTrack { track_id: String },
     ImportedLocalFile { path: String },
 }
 
@@ -28,6 +29,7 @@ impl PlaybackSource {
     pub fn is_available_offline(&self) -> bool {
         match self {
             Self::YouTubeVideo { .. } => can_persist_youtube_audio(),
+            Self::SoundCloudTrack { .. } => false,
             Self::ImportedLocalFile { .. } => true,
         }
     }

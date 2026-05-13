@@ -1,10 +1,11 @@
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use mpris_server::*;
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct MprisState {
     pub is_playing: Arc<AtomicBool>,

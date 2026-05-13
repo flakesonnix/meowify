@@ -1,5 +1,3 @@
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::{cell::RefCell, rc::Rc};
 
 use adw::prelude::*;
@@ -320,7 +318,8 @@ fn play_current_gst2(playback: &PlaybackState, gst: &Option<GstBackend>) {
     };
     let path = match &item.source {
         meowify_playback::PlaybackSource::ImportedLocalFile { path } => path.clone(),
-        meowify_playback::PlaybackSource::YouTubeVideo { .. } => return,
+        meowify_playback::PlaybackSource::YouTubeVideo { .. }
+        | meowify_playback::PlaybackSource::SoundCloudTrack { .. } => return,
     };
     if !std::path::Path::new(&path).exists() {
         return;
@@ -773,6 +772,13 @@ fn party_queue_text(snap: &RoomSnapshot) -> String {
                     title.as_deref().unwrap_or("(no title)"),
                     channel_title.as_deref().unwrap_or("(no channel)")
                 ),
+                TrackRef::SoundCloud {
+                    title, user_title, ..
+                } => format!(
+                    "{} — {}",
+                    title.as_deref().unwrap_or("(no title)"),
+                    user_title.as_deref().unwrap_or("(no user)")
+                ),
                 TrackRef::ImportedLocalFile { title, .. } => format!("[local] {title}"),
             };
             format!(
@@ -796,6 +802,14 @@ fn party_playback_text(snap: &RoomSnapshot) -> String {
             "Playing: {} ({}) — {} ms",
             title.as_deref().unwrap_or("(no title)"),
             video_id,
+            pb.position_ms
+        ),
+        Some(TrackRef::SoundCloud {
+            title, user_title, ..
+        }) => format!(
+            "Playing: {} — {} (SC) — {} ms",
+            title.as_deref().unwrap_or("(no title)"),
+            user_title.as_deref().unwrap_or("(no user)"),
             pb.position_ms
         ),
         Some(TrackRef::ImportedLocalFile { title, .. }) => {

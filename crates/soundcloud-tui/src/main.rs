@@ -426,7 +426,8 @@ impl AppState {
             meowify_playback::PlaybackSource::ImportedLocalFile { path } => {
                 (path.clone(), format!("file://{}", path))
             }
-            meowify_playback::PlaybackSource::YouTubeVideo { .. } => return,
+            meowify_playback::PlaybackSource::YouTubeVideo { .. }
+            | meowify_playback::PlaybackSource::SoundCloudTrack { .. } => return,
         };
         if !std::path::Path::new(&path).exists() {
             self.last_event = format!("file not found: {path}");
@@ -798,6 +799,14 @@ fn party_playback_line(snap: &meowify_party::RoomSnapshot) -> String {
             video_id,
             pb.position_ms
         ),
+        Some(TrackRef::SoundCloud {
+            title, user_title, ..
+        }) => format!(
+            "Now playing: {} — {} (SC) at {} ms",
+            title.as_deref().unwrap_or("(no title)"),
+            user_title.as_deref().unwrap_or("(no user)"),
+            pb.position_ms
+        ),
         Some(TrackRef::ImportedLocalFile { title, .. }) => {
             format!("Now playing: [local] {title} at {} ms", pb.position_ms)
         }
@@ -858,6 +867,13 @@ fn party_queue_rows(snap: &meowify_party::RoomSnapshot) -> Vec<String> {
                     "{} — {}",
                     title.as_deref().unwrap_or("(no title)"),
                     channel_title.as_deref().unwrap_or("(no channel)")
+                ),
+                TrackRef::SoundCloud {
+                    title, user_title, ..
+                } => format!(
+                    "{} — {}",
+                    title.as_deref().unwrap_or("(no title)"),
+                    user_title.as_deref().unwrap_or("(no user)")
                 ),
                 TrackRef::ImportedLocalFile { title, .. } => format!("[local] {title}"),
             };
@@ -1006,6 +1022,13 @@ fn party_queue_widget(snap: &meowify_party::RoomSnapshot) -> Paragraph<'static> 
                 "{} — {}",
                 title.as_deref().unwrap_or("(no title)"),
                 channel_title.as_deref().unwrap_or("(no channel)")
+            ),
+            TrackRef::SoundCloud {
+                title, user_title, ..
+            } => format!(
+                "{} — {}",
+                title.as_deref().unwrap_or("(no title)"),
+                user_title.as_deref().unwrap_or("(no user)")
             ),
             TrackRef::ImportedLocalFile { title, .. } => format!("[local] {title}"),
         };
