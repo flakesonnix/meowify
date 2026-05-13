@@ -1,3 +1,4 @@
+use std::sync::OnceLock;
 use std::{cell::RefCell, rc::Rc};
 
 use adw::prelude::*;
@@ -12,6 +13,7 @@ use meowify_playback::{PlaybackError, PlaybackState, PlaybackStatus};
 mod mpris;
 
 const APP_ID: &str = "dev.meowify.Meowify";
+static MPRIS: OnceLock<mpris::MprisState> = OnceLock::new();
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ShellSection {
@@ -21,7 +23,8 @@ struct ShellSection {
 
 fn main() -> glib::ExitCode {
     let mpris_state = mpris::MprisState::new();
-    mpris::spawn_mpris(mpris_state, "Meowify");
+    mpris::spawn_mpris(mpris_state.clone(), "Meowify");
+    let _ = MPRIS.set(mpris_state);
 
     let app = adw::Application::builder().application_id(APP_ID).build();
     app.connect_activate(build_ui);
@@ -259,6 +262,47 @@ fn playback_card() -> gtk::Frame {
     let gst2 = Rc::clone(&gst);
     glib::timeout_add_local(std::time::Duration::from_secs(1), move || {
         let mut p = pb.borrow_mut();
+
+        if let Some(mpris) = MPRIS.get() {
+            let play_req = mpris.consume_play() || mpris.consume_play_pause();
+            let pause_req = mpris.consume_pause() || mpris.consume_play_pause();
+            if play_req && p.status != PlaybackStatus::Playing {
+                let _ = p.play();
+                if let Some(g) = &*gst2.borrow() {
+                    if let Some(item) = p.current() {
+                        if let meowify_playback::PlaybackSource::ImportedLocalFile { path } =
+                            &item.source
+                        {
+                            let uri = format!("file://{path}");
+                            let _ = g.set_uri(&uri);
+                            let _ = g.play();
+                        }
+                    }
+                }
+            }
+            if pause_req {
+                p.pause();
+                if let Some(g) = &*gst2.borrow() {
+                    let _ = g.pause();
+                }
+            }
+            if mpris.consume_stop() {
+                p.stop();
+                if let Some(g) = &*gst2.borrow() {
+                    let _ = g.stop();
+                }
+            }
+
+            mpris.is_playing.store(
+                p.status == PlaybackStatus::Playing,
+                std::sync::atomic::Ordering::SeqCst,
+            );
+            if let Some(item) = p.current() {
+                *mpris.current_title.lock().unwrap() = item.title.clone();
+            }
+            *mpris.position_ms.lock().unwrap() = p.position_ms;
+        }
+
         if p.status == PlaybackStatus::Playing {
             if let Some(g) = &*gst2.borrow() {
                 if let Some(pos) = g.position() {

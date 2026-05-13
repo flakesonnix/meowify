@@ -2,8 +2,8 @@ use std::{io, time::Duration};
 
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use meowify_party::{
-    ConnectionState, JoinRequest, LanDiscoveryHandle, PartyClient, PartyRole,
-    PlaybackCommandKind, RoomServer, RoomVisibility, TrackRef,
+    ConnectionState, JoinRequest, LanDiscoveryHandle, PartyClient, PartyRole, PlaybackCommandKind,
+    RoomServer, RoomVisibility, TrackRef,
 };
 use meowify_playback::gst::GstBackend;
 use meowify_playback::{PlaybackError, PlaybackState, PlaybackStatus};
