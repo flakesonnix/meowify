@@ -13,7 +13,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, Paragraph, Wrap},
+    widgets::{Block, Borders, Gauge, List, ListItem, Paragraph, Wrap},
 };
 use tokio::sync::mpsc;
 
@@ -510,6 +510,16 @@ fn render(frame: &mut Frame, app: &AppState) {
     frame.render_widget(navigation(app), layout[0]);
 
     if app.selected_view() == View::Party {
+        let (party_layout, progress_extra) =
+            if app.playback.status == PlaybackStatus::Playing && app.gst.is_some() {
+                let c = Layout::default()
+                    .direction(Direction::Vertical)
+                    .constraints([Constraint::Min(1), Constraint::Length(3)])
+                    .split(layout[1]);
+                (c[0], Some(c[1]))
+            } else {
+                (layout[1], None)
+            };
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
@@ -517,15 +527,52 @@ fn render(frame: &mut Frame, app: &AppState) {
                 Constraint::Min(5),
                 Constraint::Length(8),
             ])
-            .split(layout[1]);
+            .split(party_layout);
 
         let snap = app.room.snapshot();
         frame.render_widget(party_header(app, &snap), chunks[0]);
         frame.render_widget(party_center_panel(app, &snap), chunks[1]);
         frame.render_widget(party_queue_widget(&snap), chunks[2]);
+        if let Some(progress_area) = progress_extra {
+            render_progress_bar(frame, progress_area, app);
+        }
+    } else if app.playback.status == PlaybackStatus::Playing {
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Min(1), Constraint::Length(3)])
+            .split(layout[1]);
+        frame.render_widget(detail_panel(app), chunks[0]);
+        render_progress_bar(frame, chunks[1], app);
     } else {
         frame.render_widget(detail_panel(app), layout[1]);
     }
+}
+
+fn render_progress_bar(frame: &mut Frame, area: ratatui::layout::Rect, app: &AppState) {
+    let gst = match app.gst {
+        Some(ref g) => g,
+        None => return,
+    };
+    let dur = match gst.duration() {
+        Some(d) => d,
+        None => return,
+    };
+    let total_ms = dur.as_millis() as u64;
+    if total_ms == 0 {
+        return;
+    }
+    let pct = app.playback.position_ms as f64 / total_ms as f64 * 100.0;
+    let label = format!(
+        " {} / {} ",
+        ms_fmt(app.playback.position_ms),
+        ms_fmt(total_ms)
+    );
+    let gauge = Gauge::default()
+        .block(Block::default().borders(Borders::ALL).title(" Progress "))
+        .gauge_style(Style::default().fg(Color::Cyan))
+        .percent(pct as u16)
+        .label(label);
+    frame.render_widget(gauge, area);
 }
 
 fn navigation(app: &AppState) -> List<'static> {
