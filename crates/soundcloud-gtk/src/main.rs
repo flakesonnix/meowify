@@ -6,6 +6,7 @@ use meowify_party::{
     ConnectionState, JoinRequest, LanDiscoveryHandle, PartyClient, PartyRole, PlaybackCommandKind,
     RoomServer, RoomSnapshot, RoomVisibility, TrackRef,
 };
+use meowify_playback::gst::GstBackend;
 use meowify_playback::{PlaybackError, PlaybackState, PlaybackStatus};
 
 const APP_ID: &str = "dev.meowify.Meowify";
@@ -121,6 +122,7 @@ fn main_panel() -> gtk::Box {
 
 fn playback_card() -> gtk::Frame {
     let playback = Rc::new(RefCell::new(PlaybackState::default()));
+    let gst = Rc::new(RefCell::new(GstBackend::new().ok()));
 
     let card = gtk::Box::new(gtk::Orientation::Vertical, 10);
     card.set_margin_top(14);
@@ -143,9 +145,7 @@ fn playback_card() -> gtk::Frame {
     current.set_xalign(0.0);
     current.add_css_class("dim-label");
 
-    let event = gtk::Label::new(Some(
-        "Ready; queue is empty until search/import wiring lands.",
-    ));
+    let event = gtk::Label::new(Some("Ready — import a file to play."));
     event.set_xalign(0.0);
     event.set_wrap(true);
     event.add_css_class("dim-label");
@@ -161,42 +161,66 @@ fn playback_card() -> gtk::Frame {
     controls.append(&stop);
     controls.append(&next);
 
-    connect_playback_button(
+    connect_playback_button2(
         &play_pause,
         Rc::clone(&playback),
+        Rc::clone(&gst),
         &status,
         &queue,
         &current,
         &event,
-        toggle_playback,
+        toggle_playback2,
     );
-    connect_playback_button(
+    connect_playback_button2(
         &stop,
         Rc::clone(&playback),
+        Rc::clone(&gst),
         &status,
         &queue,
         &current,
         &event,
-        stop_playback,
+        stop_playback2,
     );
-    connect_playback_button(
+    connect_playback_button2(
         &previous,
         Rc::clone(&playback),
+        Rc::clone(&gst),
         &status,
         &queue,
         &current,
         &event,
-        skip_previous,
+        skip_previous2,
     );
-    connect_playback_button(
+    connect_playback_button2(
         &next,
         Rc::clone(&playback),
+        Rc::clone(&gst),
         &status,
         &queue,
         &current,
         &event,
-        skip_next,
+        skip_next2,
     );
+
+    let pb = Rc::clone(&playback);
+    let st = status.clone();
+    let qu = queue.clone();
+    let cu = current.clone();
+    let gst2 = Rc::clone(&gst);
+    glib::timeout_add_local(std::time::Duration::from_secs(1), move || {
+        let mut p = pb.borrow_mut();
+        if p.status == PlaybackStatus::Playing {
+            if let Some(g) = &*gst2.borrow() {
+                if let Some(pos) = g.position() {
+                    p.position_ms = pos.as_millis() as u64;
+                }
+            }
+        }
+        st.set_text(&playback_status_text(&p));
+        qu.set_text(&playback_queue_text(&p));
+        cu.set_text(&playback_current_text(&p));
+        glib::ControlFlow::Continue
+    });
 
     card.append(&title);
     card.append(&status);
@@ -209,6 +233,105 @@ fn playback_card() -> gtk::Frame {
     frame.set_child(Some(&card));
     frame.add_css_class("card");
     frame
+}
+
+fn play_current_gst2(playback: &PlaybackState, gst: &Option<GstBackend>) {
+    let item = match playback.current() {
+        Some(i) => i,
+        None => return,
+    };
+    let path = match &item.source {
+        meowify_playback::PlaybackSource::ImportedLocalFile { path } => path.clone(),
+        meowify_playback::PlaybackSource::YouTubeVideo { .. } => return,
+    };
+    if !std::path::Path::new(&path).exists() {
+        return;
+    }
+    if let Some(g) = gst {
+        let uri = format!("file://{path}");
+        let _ = g.set_uri(&uri);
+        let _ = g.play();
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn connect_playback_button2(
+    button: &gtk::Button,
+    playback: Rc<RefCell<PlaybackState>>,
+    gst: Rc<RefCell<Option<GstBackend>>>,
+    status: &gtk::Label,
+    queue: &gtk::Label,
+    current: &gtk::Label,
+    event: &gtk::Label,
+    action: fn(&mut PlaybackState, &Option<GstBackend>) -> String,
+) {
+    let status = status.clone();
+    let queue = queue.clone();
+    let current = current.clone();
+    let event = event.clone();
+
+    button.connect_clicked(move |_| {
+        let mut playback = playback.borrow_mut();
+        let gst_borrow = gst.borrow();
+        let event_text = action(&mut playback, &gst_borrow);
+        refresh_playback_labels(&playback, &status, &queue, &current);
+        event.set_text(&event_text);
+    });
+}
+
+fn toggle_playback2(playback: &mut PlaybackState, gst: &Option<GstBackend>) -> String {
+    match playback.status {
+        PlaybackStatus::Playing => {
+            playback.pause();
+            if let Some(g) = gst {
+                let _ = g.pause();
+            }
+            "Playback paused.".to_string()
+        }
+        PlaybackStatus::Stopped | PlaybackStatus::Paused => match playback.play() {
+            Ok(()) => {
+                play_current_gst2(playback, gst);
+                "Playback started.".to_string()
+            }
+            Err(PlaybackError::QueueEmpty) => {
+                "Queue empty — import a file first.".to_string()
+            }
+        },
+    }
+}
+
+fn stop_playback2(playback: &mut PlaybackState, gst: &Option<GstBackend>) -> String {
+    playback.stop();
+    if let Some(g) = gst {
+        let _ = g.stop();
+    }
+    "Playback stopped.".to_string()
+}
+
+fn skip_next2(playback: &mut PlaybackState, gst: &Option<GstBackend>) -> String {
+    if let Some(g) = gst {
+        let _ = g.stop();
+    }
+    match playback.skip_next().map(|item| item.title.clone()) {
+        Some(title) => {
+            play_current_gst2(playback, gst);
+            format!("Skipped to next: {title}")
+        }
+        None => "No next item.".to_string(),
+    }
+}
+
+fn skip_previous2(playback: &mut PlaybackState, gst: &Option<GstBackend>) -> String {
+    if let Some(g) = gst {
+        let _ = g.stop();
+    }
+    match playback.skip_previous().map(|item| item.title.clone()) {
+        Some(title) => {
+            play_current_gst2(playback, gst);
+            format!("Skipped to previous: {title}")
+        }
+        None => "No previous item.".to_string(),
+    }
 }
 
 fn role_markup(role: PartyRole, label: &str) -> String {
@@ -606,28 +729,6 @@ fn party_playback_text(snap: &RoomSnapshot) -> String {
     }
 }
 
-fn connect_playback_button(
-    button: &gtk::Button,
-    playback: Rc<RefCell<PlaybackState>>,
-    status: &gtk::Label,
-    queue: &gtk::Label,
-    current: &gtk::Label,
-    event: &gtk::Label,
-    action: fn(&mut PlaybackState) -> String,
-) {
-    let status = status.clone();
-    let queue = queue.clone();
-    let current = current.clone();
-    let event = event.clone();
-
-    button.connect_clicked(move |_| {
-        let mut playback = playback.borrow_mut();
-        let event_text = action(&mut playback);
-        refresh_playback_labels(&playback, &status, &queue, &current);
-        event.set_text(&event_text);
-    });
-}
-
 fn refresh_playback_labels(
     playback: &PlaybackState,
     status: &gtk::Label,
@@ -664,40 +765,6 @@ fn playback_status_name(status: PlaybackStatus) -> &'static str {
         PlaybackStatus::Playing => "playing",
         PlaybackStatus::Paused => "paused",
     }
-}
-
-fn toggle_playback(playback: &mut PlaybackState) -> String {
-    match playback.status {
-        PlaybackStatus::Playing => {
-            playback.pause();
-            "Playback paused.".to_string()
-        }
-        PlaybackStatus::Stopped | PlaybackStatus::Paused => match playback.play() {
-            Ok(()) => "Playback started.".to_string(),
-            Err(PlaybackError::QueueEmpty) => {
-                "Queue empty; add tracks after search/import wiring lands.".to_string()
-            }
-        },
-    }
-}
-
-fn stop_playback(playback: &mut PlaybackState) -> String {
-    playback.stop();
-    "Playback stopped.".to_string()
-}
-
-fn skip_previous(playback: &mut PlaybackState) -> String {
-    playback
-        .skip_previous()
-        .map(|item| format!("Skipped to previous: {}", item.title))
-        .unwrap_or_else(|| "No previous item; playback stopped.".to_string())
-}
-
-fn skip_next(playback: &mut PlaybackState) -> String {
-    playback
-        .skip_next()
-        .map(|item| format!("Skipped to next: {}", item.title))
-        .unwrap_or_else(|| "No next item; playback stopped.".to_string())
 }
 
 fn status_card(title: &str, body: &str) -> gtk::Frame {
@@ -923,8 +990,9 @@ mod tests {
     #[test]
     fn gtk_playback_play_reports_empty_queue() {
         let mut playback = PlaybackState::default();
+        let gst: Option<GstBackend> = None;
 
-        let event = toggle_playback(&mut playback);
+        let event = toggle_playback2(&mut playback, &gst);
 
         assert_eq!(playback.status, PlaybackStatus::Stopped);
         assert!(event.contains("Queue empty"));
@@ -936,8 +1004,9 @@ mod tests {
             position_ms: 90_000,
             ..PlaybackState::default()
         };
+        let gst: Option<GstBackend> = None;
 
-        let event = stop_playback(&mut playback);
+        let event = stop_playback2(&mut playback, &gst);
 
         assert_eq!(playback_status_text(&playback), "Playback: stopped at 0 ms");
         assert_eq!(event, "Playback stopped.");
