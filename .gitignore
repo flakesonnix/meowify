@@ -1,0 +1,9 @@
+/target/
+/.direnv/
+/result
+/result-*
+/.env
+*.db
+*.sqlite
+*.sqlite3
+*.log
