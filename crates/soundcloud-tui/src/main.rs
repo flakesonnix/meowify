@@ -6,6 +6,7 @@ use meowify_party::{
     ConnectionState, DiscoveryEvent, JoinRequest, LanDiscovery, PartyClient, PartyRole,
     PlaybackCommandKind, RoomAnnouncement, RoomServer, RoomVisibility, TrackRef,
 };
+use meowify_playback::gst::GstBackend;
 use meowify_playback::{PlaybackError, PlaybackState, PlaybackStatus};
 use ratatui::{
     DefaultTerminal, Frame,
@@ -129,10 +130,12 @@ struct AppState {
     input_mode: InputMode,
     input_buf: String,
     imported_count: usize,
+    gst: Option<GstBackend>,
 }
 
 impl Default for AppState {
     fn default() -> Self {
+        let gst = GstBackend::new().ok();
         Self {
             selected: 0,
             should_quit: false,
@@ -143,6 +146,7 @@ impl Default for AppState {
             input_mode: InputMode::Normal,
             input_buf: String::new(),
             imported_count: 0,
+            gst,
         }
     }
 }
@@ -311,32 +315,73 @@ impl AppState {
             PlaybackStatus::Playing => {
                 self.playback.pause();
                 self.last_event = "playback paused".to_string();
+                if let Some(ref gst) = self.gst {
+                    let _ = gst.pause();
+                }
             }
             PlaybackStatus::Stopped | PlaybackStatus::Paused => match self.playback.play() {
-                Ok(()) => self.last_event = "playback started".to_string(),
+                Ok(()) => {
+                    self.last_event = "playback started".to_string();
+                    self.play_current_gst();
+                }
                 Err(PlaybackError::QueueEmpty) => {
-                    self.last_event =
-                        "queue empty; add tracks after search/import wiring lands".to_string();
+                    self.last_event = "queue empty — press i to import a file".to_string();
                 }
             },
+        }
+    }
+
+    fn play_current_gst(&mut self) {
+        let item = match self.playback.current() {
+            Some(i) => i.clone(),
+            None => return,
+        };
+        let (path, uri) = match &item.source {
+            meowify_playback::PlaybackSource::ImportedLocalFile { path } => {
+                (path.clone(), format!("file://{}", path))
+            }
+            meowify_playback::PlaybackSource::YouTubeVideo { .. } => return,
+        };
+        if !std::path::Path::new(&path).exists() {
+            self.last_event = format!("file not found: {path}");
+            return;
+        }
+        if let Some(ref gst) = self.gst {
+            let _ = gst.set_uri(&uri);
+            let _ = gst.play();
         }
     }
 
     fn stop_playback(&mut self) {
         self.playback.stop();
         self.last_event = "playback stopped".to_string();
+        if let Some(ref gst) = self.gst {
+            let _ = gst.stop();
+        }
     }
 
     fn skip_next(&mut self) {
+        if let Some(ref gst) = self.gst {
+            let _ = gst.stop();
+        }
         self.last_event = match self.playback.skip_next().map(|item| item.title.clone()) {
-            Some(title) => format!("skipped to next: {title}"),
+            Some(title) => {
+                self.play_current_gst();
+                format!("skipped to next: {title}")
+            }
             None => "no next item; playback stopped".to_string(),
         };
     }
 
     fn skip_previous(&mut self) {
+        if let Some(ref gst) = self.gst {
+            let _ = gst.stop();
+        }
         self.last_event = match self.playback.skip_previous().map(|item| item.title.clone()) {
-            Some(title) => format!("skipped to previous: {title}"),
+            Some(title) => {
+                self.play_current_gst();
+                format!("skipped to previous: {title}")
+            }
             None => "no previous item; playback stopped".to_string(),
         };
     }
@@ -414,6 +459,14 @@ fn run(terminal: &mut DefaultTerminal) -> io::Result<()> {
     let mut app = AppState::default();
 
     while !app.should_quit {
+        if app.playback.status == PlaybackStatus::Playing {
+            if let Some(ref gst) = app.gst {
+                if let Some(pos) = gst.position() {
+                    app.playback.position_ms = pos.as_millis() as u64;
+                }
+            }
+        }
+
         terminal.draw(|frame| render(frame, &app))?;
 
         if event::poll(Duration::from_millis(200))? {
@@ -938,7 +991,10 @@ mod tests {
 
     #[test]
     fn play_key_reports_empty_queue_without_panicking() {
-        let mut app = AppState::default();
+        let mut app = AppState {
+            gst: None,
+            ..AppState::default()
+        };
 
         app.handle_key(KeyCode::Char(' '));
 
