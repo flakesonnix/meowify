@@ -42,6 +42,7 @@ impl From<PermissionError> for RoomError {
     }
 }
 
+#[derive(Debug)]
 pub struct RoomServer {
     room: PartyRoom,
     clients: HashMap<ClientId, PartyClient>,

@@ -2,7 +2,10 @@ use std::{io, time::Duration};
 
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use meowify_core::can_persist_youtube_audio;
-use meowify_party::{PartyPermission, PartyRole, can};
+use meowify_party::{
+    ConnectionState, JoinRequest, PartyClient, PartyRole, PlaybackCommandKind, RoomServer,
+    RoomVisibility, TrackRef,
+};
 use meowify_playback::{PlaybackError, PlaybackState, PlaybackStatus};
 use ratatui::{
     DefaultTerminal, Frame,
@@ -51,11 +54,12 @@ impl View {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug)]
 struct AppState {
     selected: usize,
     should_quit: bool,
     playback: PlaybackState,
+    room: RoomServer,
     last_event: String,
 }
 
@@ -65,7 +69,8 @@ impl Default for AppState {
             selected: 0,
             should_quit: false,
             playback: PlaybackState::default(),
-            last_event: "ready; queue is empty until search/import wiring lands".to_string(),
+            room: make_demo_room(),
+            last_event: "ready; queue empty until search/import wiring lands".to_string(),
         }
     }
 }
@@ -96,8 +101,32 @@ impl AppState {
             KeyCode::Char('s') => self.stop_playback(),
             KeyCode::Char('n') => self.skip_next(),
             KeyCode::Char('p') => self.skip_previous(),
+            KeyCode::Char('l') => self.lock_room(),
+            KeyCode::Char('u') => self.unlock_room(),
+            KeyCode::Char('e') => self.end_room(),
             _ => {}
         }
+    }
+
+    fn lock_room(&mut self) {
+        self.last_event = match self.room.lock_room("admin-1") {
+            Ok(()) => "room locked".to_string(),
+            Err(e) => format!("lock failed: {e}"),
+        };
+    }
+
+    fn unlock_room(&mut self) {
+        self.last_event = match self.room.unlock_room("admin-1") {
+            Ok(()) => "room unlocked".to_string(),
+            Err(e) => format!("unlock failed: {e}"),
+        };
+    }
+
+    fn end_room(&mut self) {
+        self.last_event = match self.room.end_room("admin-1") {
+            Ok(()) => "room ended".to_string(),
+            Err(e) => format!("end failed: {e}"),
+        };
     }
 
     fn toggle_playback(&mut self) {
@@ -134,6 +163,58 @@ impl AppState {
             None => "no previous item; playback stopped".to_string(),
         };
     }
+}
+
+fn make_demo_room() -> RoomServer {
+    let admin = PartyClient {
+        client_id: "admin-1".to_string(),
+        device_name: "laptop".to_string(),
+        user_name: "Alice (admin)".to_string(),
+        role: PartyRole::Admin,
+        permissions_override: Vec::new(),
+        connected_at_ms: 0,
+        last_seen_ms: 0,
+        connection_state: ConnectionState::Connected,
+    };
+    let mut server = RoomServer::create(
+        "demo-room",
+        "LAN Party Demo",
+        RoomVisibility::LanVisible,
+        admin,
+        "demo-invite",
+        0,
+    );
+    let _ = server.handle_join_request(JoinRequest {
+        request_id: "req-bob".to_string(),
+        room_id: "demo-room".to_string(),
+        client_id: "client-bob".to_string(),
+        user_name: "Bob".to_string(),
+        device_name: "phone".to_string(),
+        invite_code_attempt: None,
+        requested_at_ms: 500,
+    });
+    let _ = server.approve_join("admin-1", "req-bob", PartyRole::Client, 1000);
+    let _ = server.add_queue_item(
+        "admin-1",
+        "item-1",
+        TrackRef::YouTube {
+            video_id: "dQw4w9WgXcQ".to_string(),
+            title: Some("Never Gonna Give You Up".to_string()),
+            channel_title: Some("Rick Astley".to_string()),
+        },
+    );
+    let _ = server.apply_playback_command(
+        "admin-1",
+        PlaybackCommandKind::SetTrack {
+            track_ref: TrackRef::YouTube {
+                video_id: "dQw4w9WgXcQ".to_string(),
+                title: Some("Never Gonna Give You Up".to_string()),
+                channel_title: Some("Rick Astley".to_string()),
+            },
+        },
+        2000,
+    );
+    server
 }
 
 fn main() -> io::Result<()> {
@@ -194,13 +275,8 @@ fn detail_panel(app: &AppState) -> Paragraph<'static> {
     } else {
         "YouTube audio persistence: disabled; use local imports and metadata refs"
     };
-    let party_policy = if can(PartyRole::Client, PartyPermission::ControlPlayback) {
-        "Client playback control: allowed by default"
-    } else {
-        "Client playback control: denied by default; enforce RBAC in handlers"
-    };
 
-    Paragraph::new(vec![
+    let mut lines = vec![
         Line::from(Span::styled(
             selected.title(),
             Style::default()
@@ -210,7 +286,9 @@ fn detail_panel(app: &AppState) -> Paragraph<'static> {
         Line::from(""),
         Line::from(selected.detail()),
         Line::from(""),
-        Line::from("Keys: j/down next view, k/up previous view, space play/pause, s stop, n/p skip, q/esc quit"),
+        Line::from(
+            "Keys: j/down next view, k/up previous view, space play/pause, s stop, n/p skip, q/esc quit",
+        ),
         Line::from(""),
         Line::from(playback_status_line(&app.playback)),
         Line::from(playback_queue_line(&app.playback)),
@@ -218,14 +296,27 @@ fn detail_panel(app: &AppState) -> Paragraph<'static> {
         Line::from(format!("Last event: {}", app.last_event)),
         Line::from(""),
         Line::from(offline_policy),
-        Line::from(party_policy),
-    ])
-    .block(
-        Block::default()
-            .borders(Borders::ALL)
-            .title(" Current view "),
-    )
-    .wrap(Wrap { trim: true })
+    ];
+
+    if selected == View::Party {
+        let snap = app.room.snapshot();
+        lines.push(Line::from(""));
+        lines.push(Line::from(party_room_line(&snap)));
+        lines.push(Line::from(party_members_line(&snap)));
+        lines.push(Line::from(party_queue_line(&snap)));
+        lines.push(Line::from(party_playback_line(&snap)));
+        lines.push(Line::from(
+            "Party keys: l lock room, u unlock room, e end room",
+        ));
+    }
+
+    Paragraph::new(lines)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" Current view "),
+        )
+        .wrap(Wrap { trim: true })
 }
 
 fn playback_status_line(playback: &PlaybackState) -> String {
@@ -247,6 +338,39 @@ fn playback_current_line(playback: &PlaybackState) -> String {
         .unwrap_or_else(|| "Current: none".to_string())
 }
 
+fn party_room_line(snap: &meowify_party::RoomSnapshot) -> String {
+    format!(
+        "Room: {} | State: {:?} | Protocol v{}",
+        snap.room.room_name, snap.room.state, snap.protocol_version
+    )
+}
+
+fn party_members_line(snap: &meowify_party::RoomSnapshot) -> String {
+    format!("Members: {}", snap.members.len())
+}
+
+fn party_queue_line(snap: &meowify_party::RoomSnapshot) -> String {
+    format!("Queue: {} item(s)", snap.queue.len())
+}
+
+fn party_playback_line(snap: &meowify_party::RoomSnapshot) -> String {
+    let pb = &snap.playback_state;
+    match &pb.track_ref {
+        Some(TrackRef::YouTube {
+            title, video_id, ..
+        }) => format!(
+            "Now playing: {} ({}) at {} ms",
+            title.as_deref().unwrap_or("(no title)"),
+            video_id,
+            pb.position_ms
+        ),
+        Some(TrackRef::ImportedLocalFile { title, .. }) => {
+            format!("Now playing: [local] {title} at {} ms", pb.position_ms)
+        }
+        None => "Playback: idle".to_string(),
+    }
+}
+
 fn playback_status_name(status: PlaybackStatus) -> &'static str {
     match status {
         PlaybackStatus::Stopped => "stopped",
@@ -258,6 +382,7 @@ fn playback_status_name(status: PlaybackStatus) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use meowify_party::{PartyPermission, can};
 
     #[test]
     fn navigation_wraps_in_both_directions() {
@@ -283,6 +408,42 @@ mod tests {
     fn tui_guardrails_match_core_and_party_policy() {
         assert!(!can_persist_youtube_audio());
         assert!(!can(PartyRole::Client, PartyPermission::ControlPlayback));
+    }
+
+    #[test]
+    fn party_view_shows_demo_room_state() {
+        let app = AppState::default();
+        let snap = app.room.snapshot();
+
+        let room_line = party_room_line(&snap);
+        assert!(room_line.contains("LAN Party Demo"));
+        assert!(room_line.contains("Protocol v"));
+
+        let members_line = party_members_line(&snap);
+        assert!(members_line.contains('2'));
+
+        let queue_line = party_queue_line(&snap);
+        assert!(queue_line.contains('1'));
+    }
+
+    #[test]
+    fn lock_key_updates_room_state_and_last_event() {
+        let mut app = AppState::default();
+        app.handle_key(KeyCode::Char('l'));
+
+        assert_eq!(app.last_event, "room locked");
+        let snap = app.room.snapshot();
+        assert!(matches!(snap.room.state, meowify_party::RoomState::Locked));
+    }
+
+    #[test]
+    fn end_key_transitions_room_to_ended() {
+        let mut app = AppState::default();
+        app.handle_key(KeyCode::Char('e'));
+
+        assert_eq!(app.last_event, "room ended");
+        let snap = app.room.snapshot();
+        assert!(matches!(snap.room.state, meowify_party::RoomState::Ended));
     }
 
     #[test]
