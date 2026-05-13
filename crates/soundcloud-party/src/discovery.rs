@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use libp2p::{
@@ -286,6 +287,74 @@ impl LanDiscovery {
         }
 
         Ok(())
+    }
+}
+
+/// Bridge that runs [`LanDiscovery`] in a background tokio thread.
+/// Collects discovered rooms into a shared vec for polling by any UI.
+pub struct LanDiscoveryHandle {
+    rooms: Arc<Mutex<Vec<RoomAnnouncement>>>,
+    _shutdown: mpsc::Sender<()>,
+}
+
+impl LanDiscoveryHandle {
+    /// Start LAN discovery in a background thread. Returns `None` if the
+    /// transport layer cannot be initialised (e.g. no network interfaces).
+    pub fn start() -> Option<Self> {
+        let announcement = RoomAnnouncement::new(
+            "",
+            "Meowify Client",
+            RoomVisibility::LanVisible,
+            "user",
+        );
+        let rooms: Arc<Mutex<Vec<RoomAnnouncement>>> = Arc::new(Mutex::new(Vec::new()));
+        let rooms_clone = Arc::clone(&rooms);
+        let (shutdown_tx, mut shutdown_rx) = mpsc::channel::<()>(1);
+        let (event_tx, mut event_rx) = mpsc::channel::<DiscoveryEvent>(64);
+
+        std::thread::spawn(move || {
+            let rt = tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .worker_threads(2)
+                .build()
+                .expect("tokio rt");
+            let disco =
+                rt.block_on(async { LanDiscovery::new(Some(announcement)).ok() });
+            let Some(discovery) = disco else { return };
+            rt.block_on(async move {
+                tokio::select! {
+                    _ = discovery.run(event_tx) => {}
+                    _ = shutdown_rx.recv() => {}
+                }
+            });
+        });
+
+        std::thread::spawn(move || {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("tokio rt for event poll");
+            rt.block_on(async move {
+                while let Some(event) = event_rx.recv().await {
+                    if let DiscoveryEvent::RoomAnnounced { announcement, .. } = event {
+                        let mut guard = rooms_clone.lock().unwrap();
+                        if !guard.iter().any(|r| r.room_id == announcement.room_id) {
+                            guard.push(announcement);
+                        }
+                    }
+                }
+            });
+        });
+
+        Some(Self {
+            rooms,
+            _shutdown: shutdown_tx,
+        })
+    }
+
+    /// Snapshot of currently discovered rooms.
+    pub fn discovered_rooms(&self) -> Vec<RoomAnnouncement> {
+        self.rooms.lock().unwrap().clone()
     }
 }
 

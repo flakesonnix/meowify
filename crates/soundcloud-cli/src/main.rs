@@ -272,6 +272,18 @@ fn render_snapshot(
         .unwrap();
 
     server
+        .handle_join_request(JoinRequest {
+            request_id: "req-carol".to_string(),
+            room_id: "room-demo".to_string(),
+            client_id: "client-carol".to_string(),
+            user_name: "Carol".to_string(),
+            device_name: "tablet".to_string(),
+            invite_code_attempt: None,
+            requested_at_ms: 1500,
+        })
+        .unwrap();
+
+    server
         .add_queue_item(
             "admin-1",
             "item-1",
@@ -353,6 +365,21 @@ fn render_room_snapshot(snap: &meowify_party::RoomSnapshot) -> String {
             out,
             "  {} | {:?} | {:?} | {}",
             m.client_id, m.role, m.connection_state, m.user_name
+        );
+    }
+    let _ = writeln!(out);
+
+    let _ = writeln!(
+        out,
+        "--- Pending Requests ({}) ---",
+        snap.pending_requests.len()
+    );
+    for req in &snap.pending_requests {
+        let invite = req.invite_code_attempt.as_deref().unwrap_or("(none)");
+        let _ = writeln!(
+            out,
+            "  {} | {} | {} ({}) | invite: {}",
+            req.request_id, req.client_id, req.user_name, req.device_name, invite
         );
     }
     let _ = writeln!(out);
@@ -578,6 +605,28 @@ mod tests {
     fn snapshot_filter_paused_excludes_active_demo_room() {
         let output = render_snapshot(false, Some(RoomStateArg::Paused), None);
         assert_eq!(output, "No rooms match the filter.\n");
+    }
+
+    #[test]
+    fn snapshot_text_shows_pending_requests() {
+        let output = render_snapshot(false, None, None);
+
+        assert!(output.contains("Pending Requests (1)"));
+        assert!(output.contains("req-carol"));
+        assert!(output.contains("client-carol"));
+        assert!(output.contains("Carol"));
+        assert!(output.contains("tablet"));
+    }
+
+    #[test]
+    fn snapshot_json_includes_pending_requests() {
+        let output = render_snapshot(true, None, None);
+
+        let value: serde_json::Value = serde_json::from_str(&output).expect("valid JSON");
+        let reqs = value["pending_requests"].as_array().unwrap();
+        assert_eq!(reqs.len(), 1);
+        assert_eq!(reqs[0]["request_id"], "req-carol");
+        assert_eq!(reqs[0]["client_id"], "client-carol");
     }
 
     #[test]

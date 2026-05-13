@@ -4,7 +4,7 @@ pub mod protocol;
 pub mod rbac;
 pub mod room;
 
-pub use discovery::{DiscoveryEvent, LanDiscovery, RoomAnnouncement};
+pub use discovery::{DiscoveryEvent, LanDiscovery, LanDiscoveryHandle, RoomAnnouncement};
 pub use model::*;
 pub use protocol::*;
 pub use rbac::*;

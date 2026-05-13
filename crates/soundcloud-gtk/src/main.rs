@@ -212,6 +212,21 @@ fn playback_card() -> gtk::Frame {
     frame
 }
 
+fn role_markup(role: PartyRole, label: &str) -> String {
+    let color = match role {
+        PartyRole::Admin => "red",
+        PartyRole::Moderator => "orange",
+        PartyRole::Client => "white",
+        PartyRole::Guest => "gray",
+    };
+    let bold = matches!(role, PartyRole::Admin | PartyRole::Moderator);
+    if bold {
+        format!("<span foreground='{color}'><b>{label}</b></span>")
+    } else {
+        format!("<span foreground='{color}'>{label}</span>")
+    }
+}
+
 fn party_card() -> gtk::Frame {
     let admin = PartyClient {
         client_id: "admin-1".to_string(),
@@ -241,6 +256,15 @@ fn party_card() -> gtk::Frame {
         requested_at_ms: 500,
     });
     let _ = server.approve_join("admin-1", "req-bob", PartyRole::Client, 1000);
+    let _ = server.handle_join_request(JoinRequest {
+        request_id: "req-carol".to_string(),
+        room_id: "demo-room".to_string(),
+        client_id: "client-carol".to_string(),
+        user_name: "Carol".to_string(),
+        device_name: "tablet".to_string(),
+        invite_code_attempt: None,
+        requested_at_ms: 1500,
+    });
     let _ = server.add_queue_item(
         "admin-1",
         "item-1",
@@ -278,9 +302,15 @@ fn party_card() -> gtk::Frame {
     let state_label = gtk::Label::new(Some(&party_state_text(&snap)));
     state_label.set_xalign(0.0);
 
-    let members_label = gtk::Label::new(Some(&party_members_text(&snap)));
+    let members_label = gtk::Label::new(None);
     members_label.set_xalign(0.0);
+    members_label.set_use_markup(true);
     members_label.add_css_class("dim-label");
+
+    let pending_label = gtk::Label::new(None);
+    pending_label.set_xalign(0.0);
+    pending_label.set_use_markup(true);
+    pending_label.add_css_class("dim-label");
 
     let queue_label = gtk::Label::new(Some(&party_queue_text(&snap)));
     queue_label.set_xalign(0.0);
@@ -303,9 +333,13 @@ fn party_card() -> gtk::Frame {
     controls.append(&unlock_btn);
     controls.append(&end_btn);
 
+    update_members_markup(&snap, &members_label);
+    update_pending_markup(&snap, &pending_label);
+
     let labels = PartyCardLabels {
         state: state_label.clone(),
         members: members_label.clone(),
+        pending: pending_label.clone(),
         queue: queue_label.clone(),
         playback: playback_label.clone(),
         event: event_label.clone(),
@@ -329,16 +363,48 @@ fn party_card() -> gtk::Frame {
             Err(e) => format!("Unlock failed: {e}"),
         },
     );
-    connect_party_button(&end_btn, Rc::clone(&server), labels, |srv| {
-        match srv.end_room("admin-1") {
+    connect_party_button(
+        &end_btn,
+        Rc::clone(&server),
+        labels.clone(),
+        |srv| match srv.end_room("admin-1") {
             Ok(()) => "Room ended.".to_string(),
             Err(e) => format!("End failed: {e}"),
+        },
+    );
+
+    let join_controls = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    let approve_btn = gtk::Button::with_label("Approve Next");
+    let reject_btn = gtk::Button::with_label("Reject Next");
+    join_controls.append(&approve_btn);
+    join_controls.append(&reject_btn);
+
+    connect_party_button(&approve_btn, Rc::clone(&server), labels.clone(), |srv| {
+        let ids: Vec<String> = srv.join_requests().map(|r| r.request_id.clone()).collect();
+        if ids.is_empty() {
+            return "no pending requests to approve".to_string();
+        }
+        match srv.approve_join("admin-1", &ids[0], PartyRole::Client, 9999) {
+            Ok(_) => format!("approved request: {}", ids[0]),
+            Err(e) => format!("approve failed: {e}"),
+        }
+    });
+    connect_party_button(&reject_btn, Rc::clone(&server), labels, |srv| {
+        let ids: Vec<String> = srv.join_requests().map(|r| r.request_id.clone()).collect();
+        if ids.is_empty() {
+            return "no pending requests to reject".to_string();
+        }
+        match srv.reject_join("admin-1", &ids[0]) {
+            Ok(_) => format!("rejected request: {}", ids[0]),
+            Err(e) => format!("reject failed: {e}"),
         }
     });
 
     card.append(&title_label);
     card.append(&state_label);
     card.append(&members_label);
+    card.append(&pending_label);
+    card.append(&join_controls);
     card.append(&queue_label);
     card.append(&playback_label);
     card.append(&event_label);
@@ -350,10 +416,55 @@ fn party_card() -> gtk::Frame {
     frame
 }
 
+fn members_markup(snap: &RoomSnapshot) -> String {
+    let mut members = snap.members.clone();
+    members.sort_by(|a, b| a.client_id.cmp(&b.client_id));
+    let header = format!("Members ({}):", members.len());
+    let mut parts = vec![header];
+    for m in &members {
+        let role_label = format!("{:?}", m.role);
+        let colored = role_markup(m.role, &role_label);
+        parts.push(format!("  {colored} | {} | {}", m.user_name, m.client_id));
+    }
+    parts.join("\n")
+}
+
+fn pending_markup(snap: &RoomSnapshot) -> Option<String> {
+    let pending = &snap.pending_requests;
+    if pending.is_empty() {
+        return None;
+    }
+    let header = format!("Pending requests ({}):", pending.len());
+    let mut parts = vec![header];
+    for req in pending {
+        let code = req.invite_code_attempt.as_deref().unwrap_or("no code");
+        parts.push(format!(
+            "  <span foreground='cyan'>{}</span> ({}) — {}",
+            req.user_name, req.device_name, code
+        ));
+    }
+    Some(parts.join("\n"))
+}
+
+fn update_members_markup(snap: &RoomSnapshot, label: &gtk::Label) {
+    label.set_markup(&members_markup(snap));
+}
+
+fn update_pending_markup(snap: &RoomSnapshot, label: &gtk::Label) {
+    match pending_markup(snap) {
+        Some(markup) => {
+            label.set_visible(true);
+            label.set_markup(&markup);
+        }
+        None => label.set_visible(false),
+    }
+}
+
 #[derive(Clone)]
 struct PartyCardLabels {
     state: gtk::Label,
     members: gtk::Label,
+    pending: gtk::Label,
     queue: gtk::Label,
     playback: gtk::Label,
     event: gtk::Label,
@@ -369,7 +480,8 @@ fn connect_party_button(
         let event_text = action(&mut server.borrow_mut());
         let snap = server.borrow().snapshot();
         labels.state.set_text(&party_state_text(&snap));
-        labels.members.set_text(&party_members_text(&snap));
+        update_members_markup(&snap, &labels.members);
+        update_pending_markup(&snap, &labels.pending);
         labels.queue.set_text(&party_queue_text(&snap));
         labels.playback.set_text(&party_playback_text(&snap));
         labels.event.set_text(&event_text);
@@ -381,20 +493,6 @@ fn party_state_text(snap: &RoomSnapshot) -> String {
         "Room: {} | State: {:?} | Protocol v{}",
         snap.room.room_name, snap.room.state, snap.protocol_version
     )
-}
-
-fn party_members_text(snap: &RoomSnapshot) -> String {
-    let mut members = snap.members.clone();
-    members.sort_by(|a, b| a.client_id.cmp(&b.client_id));
-    let header = format!("Members ({}):", members.len());
-    let rows: Vec<String> = members
-        .iter()
-        .map(|m| format!("  {:?} | {} | {}", m.role, m.client_id, m.user_name))
-        .collect();
-    std::iter::once(header)
-        .chain(rows)
-        .collect::<Vec<_>>()
-        .join("\n")
 }
 
 fn party_queue_text(snap: &RoomSnapshot) -> String {
@@ -682,7 +780,7 @@ mod tests {
     }
 
     #[test]
-    fn party_members_text_lists_each_member() {
+    fn members_markup_lists_each_member() {
         use meowify_party::{
             ConnectionState, JoinRequest, PartyClient, PartyRole, RoomServer, RoomVisibility,
         };
@@ -714,12 +812,10 @@ mod tests {
             .unwrap();
         let snap = server.snapshot();
 
-        let text = party_members_text(&snap);
-        assert!(text.contains("Members (2):"));
-        assert!(text.contains("Alice"));
-        assert!(text.contains("Bob"));
-        assert!(text.contains("Admin"));
-        assert!(text.contains("Client"));
+        let markup = members_markup(&snap);
+        assert!(markup.contains("Members (2)"));
+        assert!(markup.contains("Alice"));
+        assert!(markup.contains("Bob"));
     }
 
     #[test]
@@ -789,5 +885,115 @@ mod tests {
 
         assert_eq!(playback_status_text(&playback), "Playback: stopped at 0 ms");
         assert_eq!(event, "Playback stopped.");
+    }
+
+    #[test]
+    fn role_markup_admin_uses_red_bold() {
+        let markup = role_markup(PartyRole::Admin, "Admin");
+        assert!(markup.contains("foreground='red'"));
+        assert!(markup.contains("<b>Admin</b>"));
+    }
+
+    #[test]
+    fn role_markup_client_uses_white() {
+        let markup = role_markup(PartyRole::Client, "Client");
+        assert!(markup.contains("foreground='white'"));
+        assert!(!markup.contains("<b>"));
+    }
+
+    #[test]
+    fn members_markup_includes_role_colors() {
+        use meowify_party::{
+            ConnectionState, JoinRequest, PartyClient, PartyRole, RoomServer, RoomVisibility,
+        };
+        let admin = PartyClient {
+            client_id: "admin-1".to_string(),
+            device_name: "laptop".to_string(),
+            user_name: "Alice".to_string(),
+            role: PartyRole::Admin,
+            permissions_override: Vec::new(),
+            connected_at_ms: 0,
+            last_seen_ms: 0,
+            connection_state: ConnectionState::Connected,
+        };
+        let mut server =
+            RoomServer::create("r1", "Room", RoomVisibility::LanVisible, admin, "inv", 0);
+        server
+            .handle_join_request(JoinRequest {
+                request_id: "req-bob".to_string(),
+                room_id: "r1".to_string(),
+                client_id: "client-bob".to_string(),
+                user_name: "Bob".to_string(),
+                device_name: "phone".to_string(),
+                invite_code_attempt: None,
+                requested_at_ms: 100,
+            })
+            .unwrap();
+        server
+            .approve_join("admin-1", "req-bob", PartyRole::Client, 200)
+            .unwrap();
+        let snap = server.snapshot();
+
+        let markup = members_markup(&snap);
+        assert!(markup.contains("Members (2)"));
+        assert!(markup.contains("Alice"));
+        assert!(markup.contains("Bob"));
+        assert!(markup.contains("foreground='red'"));
+    }
+
+    #[test]
+    fn pending_markup_returns_some_with_requests() {
+        use meowify_party::{
+            ConnectionState, JoinRequest, PartyClient, PartyRole, RoomServer, RoomVisibility,
+        };
+        let admin = PartyClient {
+            client_id: "admin-1".to_string(),
+            device_name: "laptop".to_string(),
+            user_name: "Admin".to_string(),
+            role: PartyRole::Admin,
+            permissions_override: Vec::new(),
+            connected_at_ms: 0,
+            last_seen_ms: 0,
+            connection_state: ConnectionState::Connected,
+        };
+        let mut server =
+            RoomServer::create("r1", "Room", RoomVisibility::LanVisible, admin, "inv", 0);
+        server
+            .handle_join_request(JoinRequest {
+                request_id: "req-carol".to_string(),
+                room_id: "r1".to_string(),
+                client_id: "client-carol".to_string(),
+                user_name: "Carol".to_string(),
+                device_name: "tablet".to_string(),
+                invite_code_attempt: None,
+                requested_at_ms: 300,
+            })
+            .unwrap();
+        let snap = server.snapshot();
+
+        let markup = pending_markup(&snap);
+        assert!(markup.is_some());
+        let text = markup.unwrap();
+        assert!(text.contains("Pending requests (1)"));
+        assert!(text.contains("Carol"));
+    }
+
+    #[test]
+    fn pending_markup_returns_none_when_empty() {
+        use meowify_party::{ConnectionState, PartyClient, PartyRole, RoomServer, RoomVisibility};
+        let admin = PartyClient {
+            client_id: "admin-1".to_string(),
+            device_name: "laptop".to_string(),
+            user_name: "Admin".to_string(),
+            role: PartyRole::Admin,
+            permissions_override: Vec::new(),
+            connected_at_ms: 0,
+            last_seen_ms: 0,
+            connection_state: ConnectionState::Connected,
+        };
+        let server = RoomServer::create("r1", "Room", RoomVisibility::LanVisible, admin, "inv", 0);
+        let snap = server.snapshot();
+
+        assert!(pending_markup(&snap).is_none());
     }
 }

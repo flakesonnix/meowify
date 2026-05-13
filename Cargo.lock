@@ -2636,6 +2636,7 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "meowify-party",
+ "serde_json",
 ]
 
 [[package]]
@@ -2695,6 +2696,7 @@ dependencies = [
  "meowify-party",
  "meowify-playback",
  "ratatui",
+ "tokio",
 ]
 
 [[package]]
