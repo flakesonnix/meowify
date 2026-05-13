@@ -1,7 +1,10 @@
 use std::fmt::Write;
 
 use clap::{Parser, Subcommand, ValueEnum};
-use meowify_party::{PROTOCOL_VERSION, PartyPermission, PartyRole, can};
+use meowify_party::{
+    ConnectionState, JoinRequest, PROTOCOL_VERSION, PartyClient, PartyPermission, PartyRole,
+    PlaybackCommandKind, RoomServer, RoomVisibility, TrackRef, can,
+};
 
 #[derive(Debug, Parser)]
 #[command(name = "meowify-cli")]
@@ -64,6 +67,7 @@ enum PartyCommand {
         #[arg(long, value_enum)]
         role: Option<RoleArg>,
     },
+    Snapshot,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -147,6 +151,7 @@ fn render_party_command(command: &PartyCommand) -> String {
             Some(PartyPermission::SuggestTrack),
         ),
         PartyCommand::Permissions { role } => render_permissions(*role),
+        PartyCommand::Snapshot => render_snapshot(),
     }
 }
 
@@ -188,6 +193,161 @@ fn render_permissions(role_filter: Option<RoleArg>) -> String {
     }
 
     output
+}
+
+fn render_snapshot() -> String {
+    let admin = PartyClient {
+        client_id: "admin-1".to_string(),
+        device_name: "laptop".to_string(),
+        user_name: "Alice".to_string(),
+        role: PartyRole::Admin,
+        permissions_override: Vec::new(),
+        connected_at_ms: 0,
+        last_seen_ms: 0,
+        connection_state: ConnectionState::Connected,
+    };
+
+    let mut server = RoomServer::create(
+        "room-demo",
+        "Demo Room",
+        RoomVisibility::LanVisible,
+        admin,
+        "demo-invite",
+        0,
+    );
+
+    server
+        .handle_join_request(JoinRequest {
+            request_id: "req-bob".to_string(),
+            room_id: "room-demo".to_string(),
+            client_id: "client-bob".to_string(),
+            user_name: "Bob".to_string(),
+            device_name: "phone".to_string(),
+            invite_code_attempt: None,
+            requested_at_ms: 500,
+        })
+        .unwrap();
+    server
+        .approve_join("admin-1", "req-bob", PartyRole::Client, 1000)
+        .unwrap();
+
+    server
+        .add_queue_item(
+            "admin-1",
+            "item-1",
+            TrackRef::YouTube {
+                video_id: "dQw4w9WgXcQ".to_string(),
+                title: Some("Never Gonna Give You Up".to_string()),
+                channel_title: Some("Rick Astley".to_string()),
+            },
+        )
+        .unwrap();
+
+    server
+        .add_queue_item(
+            "client-bob",
+            "item-2",
+            TrackRef::YouTube {
+                video_id: "9bZkp7q19f0".to_string(),
+                title: Some("GANGNAM STYLE".to_string()),
+                channel_title: Some("officialpsy".to_string()),
+            },
+        )
+        .unwrap();
+
+    server
+        .apply_playback_command(
+            "admin-1",
+            PlaybackCommandKind::SetTrack {
+                track_ref: TrackRef::YouTube {
+                    video_id: "dQw4w9WgXcQ".to_string(),
+                    title: Some("Never Gonna Give You Up".to_string()),
+                    channel_title: Some("Rick Astley".to_string()),
+                },
+            },
+            2000,
+        )
+        .unwrap();
+
+    let snap = server.snapshot();
+    render_room_snapshot(&snap)
+}
+
+fn render_room_snapshot(snap: &meowify_party::RoomSnapshot) -> String {
+    let mut out = String::new();
+    let room = &snap.room;
+
+    let _ = writeln!(
+        out,
+        "=== Room Snapshot (protocol v{}) ===",
+        snap.protocol_version
+    );
+    let _ = writeln!(out, "room_id:    {}", room.room_id);
+    let _ = writeln!(out, "name:       {}", room.room_name);
+    let _ = writeln!(out, "state:      {:?}", room.state);
+    let _ = writeln!(out, "visibility: {:?}", room.visibility);
+    let _ = writeln!(out, "admin:      {}", snap.current_admin);
+    let _ = writeln!(out);
+
+    let _ = writeln!(out, "--- Members ({}) ---", snap.members.len());
+    let mut members = snap.members.clone();
+    members.sort_by(|a, b| a.client_id.cmp(&b.client_id));
+    for m in &members {
+        let _ = writeln!(
+            out,
+            "  {} | {:?} | {:?} | {}",
+            m.client_id, m.role, m.connection_state, m.user_name
+        );
+    }
+    let _ = writeln!(out);
+
+    let _ = writeln!(out, "--- Queue ({} items) ---", snap.queue.len());
+    for item in &snap.queue {
+        let track_label = match &item.track_ref {
+            TrackRef::YouTube {
+                title,
+                channel_title,
+                ..
+            } => format!(
+                "{} — {}",
+                title.as_deref().unwrap_or("(no title)"),
+                channel_title.as_deref().unwrap_or("(no channel)")
+            ),
+            TrackRef::ImportedLocalFile { title, .. } => format!("[local] {title}"),
+        };
+        let _ = writeln!(
+            out,
+            "  {} | votes:{:+} | by:{} | {}",
+            item.queue_item_id, item.votes, item.suggested_by, track_label
+        );
+    }
+    let _ = writeln!(out);
+
+    let pb = &snap.playback_state;
+    let _ = writeln!(out, "--- Playback ---");
+    let _ = writeln!(out, "  playing:  {}", pb.is_playing);
+    let _ = writeln!(out, "  position: {} ms", pb.position_ms);
+    let _ = writeln!(out, "  seq:      {}", pb.sequence_number);
+    match &pb.track_ref {
+        Some(TrackRef::YouTube {
+            title, video_id, ..
+        }) => {
+            let _ = writeln!(
+                out,
+                "  track:    {} ({})",
+                title.as_deref().unwrap_or("(no title)"),
+                video_id
+            );
+        }
+        Some(TrackRef::ImportedLocalFile { title, local_id }) => {
+            let _ = writeln!(out, "  track:    [local] {title} ({local_id})");
+        }
+        None => {
+            let _ = writeln!(out, "  track:    none");
+        }
+    }
+
+    out
 }
 
 impl RoleArg {
@@ -301,5 +461,21 @@ mod tests {
         assert!(output.contains("kick client client-1"));
         assert!(output.contains("required permission: KickClient"));
         assert!(output.contains("network handler not implemented"));
+    }
+
+    #[test]
+    fn snapshot_renders_room_members_queue_and_playback() {
+        let output = render_snapshot();
+
+        assert!(output.contains("room-demo"));
+        assert!(output.contains("Demo Room"));
+        assert!(output.contains("admin-1"));
+        assert!(output.contains("client-bob"));
+        assert!(output.contains("Members (2)"));
+        assert!(output.contains("Queue (2 items)"));
+        assert!(output.contains("Never Gonna Give You Up"));
+        assert!(output.contains("GANGNAM STYLE"));
+        assert!(output.contains("playing:  true"));
+        assert!(output.contains("dQw4w9WgXcQ"));
     }
 }
