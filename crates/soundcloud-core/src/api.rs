@@ -1,40 +1,48 @@
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-pub const SOUNDCLOUD_API_BASE_URL: &str = "https://api.soundcloud.com";
+pub const YOUTUBE_API_BASE_URL: &str = "https://www.googleapis.com/youtube/v3";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum TrackAccess {
-    Playable,
-    Preview,
-    Blocked,
+pub enum VideoPrivacyStatus {
+    Public,
+    Unlisted,
+    Private,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SoundCloudTrack {
-    pub urn: String,
+pub struct YouTubeVideo {
+    pub id: String,
     pub title: String,
-    pub permalink_url: Option<String>,
-    pub access: Option<TrackAccess>,
-    pub streamable: bool,
-    pub downloadable: bool,
-    pub download_url: Option<String>,
+    pub channel_id: String,
+    pub channel_title: String,
+    pub description: Option<String>,
+    pub duration_iso: Option<String>,
+    pub privacy_status: Option<VideoPrivacyStatus>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Streams {
-    pub hls_aac_160_url: Option<String>,
-    pub hls_mp3_128_url: Option<String>,
-    #[serde(default)]
-    pub http_mp3_128_url: Option<String>,
-    pub preview_mp3_128_url: Option<String>,
+pub struct YouTubeChannel {
+    pub id: String,
+    pub title: String,
+    pub description: Option<String>,
+    pub custom_url: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct LinkedCollection<T> {
-    pub collection: Vec<T>,
-    pub next_href: Option<String>,
+pub struct YouTubePlaylist {
+    pub id: String,
+    pub title: String,
+    pub channel_id: String,
+    pub description: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PagedResponse<T> {
+    pub items: Vec<T>,
+    pub next_page_token: Option<String>,
+    pub total_results: Option<u64>,
 }
 
 #[derive(Debug, Error)]
@@ -46,36 +54,37 @@ pub enum ApiError {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum OfflineStatus {
     StreamOnly,
-    Downloadable,
-    Cached,
     UnavailableOffline,
     ImportedLocalFile,
 }
 
-impl SoundCloudTrack {
+impl YouTubeVideo {
+    pub fn permalink_url(&self) -> String {
+        format!("https://www.youtube.com/watch?v={}", self.id)
+    }
+
     pub fn offline_status(&self) -> OfflineStatus {
-        match self.access {
-            Some(TrackAccess::Blocked) => OfflineStatus::UnavailableOffline,
-            _ if self.downloadable && self.download_url.is_some() => OfflineStatus::Downloadable,
+        match self.privacy_status {
+            Some(VideoPrivacyStatus::Private) => OfflineStatus::UnavailableOffline,
             _ => OfflineStatus::StreamOnly,
         }
     }
 }
 
-pub fn can_persist_soundcloud_audio() -> bool {
+pub fn can_persist_youtube_audio() -> bool {
     false
 }
 
 #[derive(Debug, Clone)]
-pub struct SoundCloudApiClient {
+pub struct YouTubeApiClient {
     http: reqwest::Client,
     base_url: String,
     access_token: String,
 }
 
-impl SoundCloudApiClient {
+impl YouTubeApiClient {
     pub fn new(access_token: impl Into<String>) -> Self {
-        Self::with_base_url(SOUNDCLOUD_API_BASE_URL, access_token)
+        Self::with_base_url(YOUTUBE_API_BASE_URL, access_token)
     }
 
     pub fn with_base_url(base_url: impl Into<String>, access_token: impl Into<String>) -> Self {
@@ -87,18 +96,28 @@ impl SoundCloudApiClient {
     }
 
     pub fn authorization_header_value(&self) -> String {
-        format!("OAuth {}", self.access_token)
+        format!("Bearer {}", self.access_token)
     }
 
-    pub fn search_tracks_request(&self, query: &str) -> Result<reqwest::Request, reqwest::Error> {
-        self.get("/tracks")
-            .query(&[("q", query), ("linked_partitioning", "true")])
+    pub fn search_videos_request(&self, query: &str) -> Result<reqwest::Request, reqwest::Error> {
+        self.get("/search")
+            .query(&[
+                ("part", "snippet"),
+                ("type", "video"),
+                ("q", query),
+                ("maxResults", "50"),
+            ])
             .build()
     }
 
-    pub fn search_users_request(&self, query: &str) -> Result<reqwest::Request, reqwest::Error> {
-        self.get("/users")
-            .query(&[("q", query), ("linked_partitioning", "true")])
+    pub fn search_channels_request(&self, query: &str) -> Result<reqwest::Request, reqwest::Error> {
+        self.get("/search")
+            .query(&[
+                ("part", "snippet"),
+                ("type", "channel"),
+                ("q", query),
+                ("maxResults", "50"),
+            ])
             .build()
     }
 
@@ -106,17 +125,58 @@ impl SoundCloudApiClient {
         &self,
         query: &str,
     ) -> Result<reqwest::Request, reqwest::Error> {
-        self.get("/playlists")
-            .query(&[("q", query), ("linked_partitioning", "true")])
+        self.get("/search")
+            .query(&[
+                ("part", "snippet"),
+                ("type", "playlist"),
+                ("q", query),
+                ("maxResults", "50"),
+            ])
             .build()
     }
 
-    pub fn track_request(&self, track_urn: &str) -> Result<reqwest::Request, reqwest::Error> {
-        self.get(&format!("/tracks/{track_urn}")).build()
+    pub fn video_request(&self, video_id: &str) -> Result<reqwest::Request, reqwest::Error> {
+        self.get("/videos")
+            .query(&[("part", "snippet,contentDetails,status"), ("id", video_id)])
+            .build()
     }
 
-    pub fn streams_request(&self, track_urn: &str) -> Result<reqwest::Request, reqwest::Error> {
-        self.get(&format!("/tracks/{track_urn}/streams")).build()
+    pub fn channel_request(&self, channel_id: &str) -> Result<reqwest::Request, reqwest::Error> {
+        self.get("/channels")
+            .query(&[("part", "snippet"), ("id", channel_id)])
+            .build()
+    }
+
+    pub fn playlist_request(&self, playlist_id: &str) -> Result<reqwest::Request, reqwest::Error> {
+        self.get("/playlists")
+            .query(&[("part", "snippet"), ("id", playlist_id)])
+            .build()
+    }
+
+    pub fn playlist_items_request(
+        &self,
+        playlist_id: &str,
+    ) -> Result<reqwest::Request, reqwest::Error> {
+        self.get("/playlistItems")
+            .query(&[
+                ("part", "snippet,contentDetails"),
+                ("playlistId", playlist_id),
+                ("maxResults", "50"),
+            ])
+            .build()
+    }
+
+    pub fn channel_playlists_request(
+        &self,
+        channel_id: &str,
+    ) -> Result<reqwest::Request, reqwest::Error> {
+        self.get("/playlists")
+            .query(&[
+                ("part", "snippet"),
+                ("channelId", channel_id),
+                ("maxResults", "50"),
+            ])
+            .build()
     }
 
     fn get(&self, path: &str) -> reqwest::RequestBuilder {
@@ -132,56 +192,76 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parses_track_access_from_api_json() {
-        let parsed: TrackAccess = serde_json::from_str("\"playable\"").unwrap();
-        assert_eq!(parsed, TrackAccess::Playable);
+    fn parses_video_privacy_status_from_api_json() {
+        let parsed: VideoPrivacyStatus = serde_json::from_str("\"public\"").unwrap();
+        assert_eq!(parsed, VideoPrivacyStatus::Public);
     }
 
     #[test]
-    fn parses_streams_response_shape() {
-        let streams: Streams = serde_json::from_str(
-            r#"{
-              "hls_aac_160_url": "https://example.invalid/aac.m3u8",
-              "hls_mp3_128_url": "https://example.invalid/mp3.m3u8",
-              "preview_mp3_128_url": null
-            }"#,
-        )
-        .unwrap();
+    fn builds_documented_video_search_request() {
+        let client =
+            YouTubeApiClient::with_base_url("https://www.googleapis.com/youtube/v3", "token");
+        let request = client.search_videos_request("ambient").unwrap();
 
-        assert!(streams.hls_aac_160_url.unwrap().ends_with("aac.m3u8"));
-        assert!(streams.preview_mp3_128_url.is_none());
-    }
-
-    #[test]
-    fn builds_documented_track_search_request() {
-        let client = SoundCloudApiClient::with_base_url("https://api.soundcloud.com", "token");
-        let request = client.search_tracks_request("ambient").unwrap();
-
-        assert_eq!(request.url().path(), "/tracks");
+        assert_eq!(request.url().path(), "/youtube/v3/search");
         assert!(request.url().query().unwrap().contains("q=ambient"));
+        assert!(request.url().query().unwrap().contains("type=video"));
         assert_eq!(
             request.headers().get("Authorization").unwrap(),
-            "OAuth token"
+            "Bearer token"
         );
     }
 
     #[test]
-    fn blocked_track_is_unavailable_offline() {
-        let track = SoundCloudTrack {
-            urn: "soundcloud:tracks:1".to_string(),
-            title: "Blocked".to_string(),
-            permalink_url: None,
-            access: Some(TrackAccess::Blocked),
-            streamable: false,
-            downloadable: true,
-            download_url: Some("https://api.soundcloud.com/tracks/1/download".to_string()),
+    fn private_video_is_unavailable_offline() {
+        let video = YouTubeVideo {
+            id: "dQw4w9WgXcQ".to_string(),
+            title: "Private".to_string(),
+            channel_id: "UC_x5XG1OV2P6uZZ5FSM9Ttw".to_string(),
+            channel_title: "Example".to_string(),
+            description: None,
+            duration_iso: None,
+            privacy_status: Some(VideoPrivacyStatus::Private),
         };
 
-        assert_eq!(track.offline_status(), OfflineStatus::UnavailableOffline);
+        assert_eq!(video.offline_status(), OfflineStatus::UnavailableOffline);
     }
 
     #[test]
-    fn app_does_not_persist_soundcloud_audio_by_default() {
-        assert!(!can_persist_soundcloud_audio());
+    fn public_video_is_stream_only() {
+        let video = YouTubeVideo {
+            id: "dQw4w9WgXcQ".to_string(),
+            title: "Public".to_string(),
+            channel_id: "UC_x5XG1OV2P6uZZ5FSM9Ttw".to_string(),
+            channel_title: "Example".to_string(),
+            description: None,
+            duration_iso: Some("PT3M33S".to_string()),
+            privacy_status: Some(VideoPrivacyStatus::Public),
+        };
+
+        assert_eq!(video.offline_status(), OfflineStatus::StreamOnly);
+    }
+
+    #[test]
+    fn app_does_not_persist_youtube_audio_by_default() {
+        assert!(!can_persist_youtube_audio());
+    }
+
+    #[test]
+    fn permalink_url_uses_standard_watch_format() {
+        let video = YouTubeVideo {
+            id: "dQw4w9WgXcQ".to_string(),
+            title: "Example".to_string(),
+            channel_id: "UC_x5XG1OV2P6uZZ5FSM9Ttw".to_string(),
+            channel_title: "Example".to_string(),
+            description: None,
+            duration_iso: None,
+            privacy_status: None,
+        };
+
+        assert_eq!(
+            video.permalink_url(),
+            "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+        );
     }
 }

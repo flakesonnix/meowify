@@ -63,6 +63,16 @@ pub struct LocalFollow {
     pub notes: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ImportedLocalFile {
+    pub local_id: String,
+    pub path: String,
+    pub title: String,
+    pub artist: Option<String>,
+    pub duration_ms: Option<i64>,
+    pub created_at_ms: i64,
+}
+
 pub struct Database {
     conn: Connection,
 }
@@ -307,6 +317,72 @@ impl Database {
 
         rows.collect::<Result<Vec<_>, _>>().map_err(DbError::from)
     }
+
+    pub fn add_imported_file(
+        &self,
+        local_id: &str,
+        path: &str,
+        title: &str,
+        artist: Option<&str>,
+        duration_ms: Option<i64>,
+    ) -> Result<ImportedLocalFile, DbError> {
+        let now = now_ms()?;
+        self.conn.execute(
+            "INSERT INTO imported_files (local_id, path, title, artist, duration_ms, created_at_ms) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![local_id, path, title, artist, duration_ms, now],
+        )?;
+
+        Ok(ImportedLocalFile {
+            local_id: local_id.to_string(),
+            path: path.to_string(),
+            title: title.to_string(),
+            artist: artist.map(str::to_string),
+            duration_ms,
+            created_at_ms: now,
+        })
+    }
+
+    pub fn imported_file(&self, local_id: &str) -> Result<Option<ImportedLocalFile>, DbError> {
+        self.conn
+            .query_row(
+                "SELECT local_id, path, title, artist, duration_ms, created_at_ms FROM imported_files WHERE local_id = ?1",
+                params![local_id],
+                imported_file_from_row,
+            )
+            .optional()
+            .map_err(DbError::from)
+    }
+
+    pub fn imported_file_by_path(&self, path: &str) -> Result<Option<ImportedLocalFile>, DbError> {
+        self.conn
+            .query_row(
+                "SELECT local_id, path, title, artist, duration_ms, created_at_ms FROM imported_files WHERE path = ?1",
+                params![path],
+                imported_file_from_row,
+            )
+            .optional()
+            .map_err(DbError::from)
+    }
+
+    pub fn list_imported_files(&self) -> Result<Vec<ImportedLocalFile>, DbError> {
+        let mut statement = self.conn.prepare(
+            "SELECT local_id, path, title, artist, duration_ms, created_at_ms FROM imported_files ORDER BY title, path",
+        )?;
+        let rows = statement.query_map([], imported_file_from_row)?;
+
+        rows.collect::<Result<Vec<_>, _>>().map_err(DbError::from)
+    }
+}
+
+fn imported_file_from_row(row: &rusqlite::Row<'_>) -> Result<ImportedLocalFile, rusqlite::Error> {
+    Ok(ImportedLocalFile {
+        local_id: row.get(0)?,
+        path: row.get(1)?,
+        title: row.get(2)?,
+        artist: row.get(3)?,
+        duration_ms: row.get(4)?,
+        created_at_ms: row.get(5)?,
+    })
 }
 
 fn now_ms() -> Result<i64, DbError> {
@@ -332,16 +408,16 @@ mod tests {
     }
 
     #[test]
-    fn creates_playlist_and_adds_soundcloud_reference() {
+    fn creates_playlist_and_adds_youtube_video_reference() {
         let db = Database::open_in_memory().unwrap();
         let playlist = db.create_playlist("playlist-1", "Ambient").unwrap();
         let item = db
             .add_playlist_item(
                 "item-1",
                 &playlist.id,
-                "soundcloud",
-                "soundcloud:tracks:1",
-                "Track 1",
+                "youtube",
+                "youtube:video:dQw4w9WgXcQ",
+                "Never Gonna Give You Up",
             )
             .unwrap();
 
@@ -349,7 +425,7 @@ mod tests {
         assert_eq!(db.list_playlists().unwrap()[0].name, "Ambient");
         assert_eq!(
             db.playlist_items(&playlist.id).unwrap()[0].source_ref,
-            "soundcloud:tracks:1"
+            "youtube:video:dQw4w9WgXcQ"
         );
     }
 
@@ -357,14 +433,17 @@ mod tests {
     fn stores_local_follows() {
         let db = Database::open_in_memory().unwrap();
         db.upsert_follow(
-            "soundcloud:users:1",
+            "youtube:channel:UC_x5XG1OV2P6uZZ5FSM9Ttw",
             "artist",
             Some("ambient"),
             Some("local note"),
         )
         .unwrap();
 
-        let follow = db.follow("soundcloud:users:1").unwrap().unwrap();
+        let follow = db
+            .follow("youtube:channel:UC_x5XG1OV2P6uZZ5FSM9Ttw")
+            .unwrap()
+            .unwrap();
         assert_eq!(follow.username, "artist");
         assert_eq!(follow.tags.as_deref(), Some("ambient"));
     }
@@ -374,8 +453,8 @@ mod tests {
         let db = Database::open_in_memory().unwrap();
         db.upsert_favorite(&LocalFavorite {
             kind: LocalFavoriteKind::Track,
-            urn: "soundcloud:tracks:1".to_string(),
-            title: "Track 1".to_string(),
+            urn: "youtube:video:dQw4w9WgXcQ".to_string(),
+            title: "Never Gonna Give You Up".to_string(),
             tags: Some("focus".to_string()),
             notes: None,
         })
@@ -383,6 +462,34 @@ mod tests {
 
         let favorites = db.favorites(LocalFavoriteKind::Track).unwrap();
         assert_eq!(favorites.len(), 1);
-        assert_eq!(favorites[0].urn, "soundcloud:tracks:1");
+        assert_eq!(favorites[0].urn, "youtube:video:dQw4w9WgXcQ");
+    }
+
+    #[test]
+    fn stores_imported_local_files_for_offline_playback() {
+        let db = Database::open_in_memory().unwrap();
+        let imported = db
+            .add_imported_file(
+                "local-1",
+                "/music/local-track.flac",
+                "Local Track",
+                Some("Local Artist"),
+                Some(181_000),
+            )
+            .unwrap();
+
+        assert_eq!(imported.local_id, "local-1");
+        assert!(imported.created_at_ms > 0);
+
+        let by_id = db.imported_file("local-1").unwrap().unwrap();
+        let by_path = db
+            .imported_file_by_path("/music/local-track.flac")
+            .unwrap()
+            .unwrap();
+        let files = db.list_imported_files().unwrap();
+
+        assert_eq!(by_id.title, "Local Track");
+        assert_eq!(by_path.artist.as_deref(), Some("Local Artist"));
+        assert_eq!(files, vec![imported]);
     }
 }
